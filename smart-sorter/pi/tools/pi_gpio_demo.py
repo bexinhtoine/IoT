@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Camera -> one stable cardboard box -> LED + buzzer + servo demo on Raspberry Pi."""
+"""Camera -> one stable cardboard box -> LED + buzzer + servo demo on Raspberry Pi.
+
+Tích hợp:
+  1. Box Detector (YOLO-World ONNX): Phát hiện hộp hàng
+  2. Packaging Classifier (MobileNetV4 ONNX): Phân loại hộp NGUYÊN VẸN (Normal) hay MÓP VỠ / RÁCH (Damage)
+  3. GPIO Actuator: Kích hoạt LED, còi, servo
+"""
 
 from __future__ import annotations
 
@@ -20,7 +26,9 @@ if str(PI_ROOT) not in sys.path:
 
 from sorter.box_detector import Box, BoxDetector
 from sorter.camera import Picamera2Camera
-from sorter.config import CameraCfg, DetectionCfg
+from sorter.config import CameraCfg, DetectionCfg, AiCfg
+from sorter.classifier_onnx import OnnxClassifier
+from sorter.interfaces import LABEL_OK, LABEL_DEFECT, ClassResult
 from sorter.pi_demo_actuators import (
     BoxTriggerGate,
     DemoActuatorSequence,
@@ -55,23 +63,26 @@ class UsbCamera:
 
 def _resolve_model(value: str) -> Path:
     path = Path(value).expanduser()
-    candidates = (path, REPO_ROOT / path, Path("/opt/sorter/models") / path.name)
+    candidates = (path, REPO_ROOT / path, Path("/opt/sorter/models") / path.name, PI_ROOT.parent / path)
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
-    raise FileNotFoundError(f"box detector not found: {value}")
+    raise FileNotFoundError(f"model not found: {value}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Pi camera box detector demo with direct LED, active buzzer and servo outputs"
+        description="Pi camera box detector & packaging classifier demo with direct LED, active buzzer and servo outputs"
     )
     parser.add_argument("--detector", default="ai/models/box_detector.onnx")
+    parser.add_argument("--classifier", default="ai/models/packaging_cls.onnx")
+    parser.add_argument("--model-card", default="ai/models/model_card.json")
     parser.add_argument("--camera", choices=("picamera2", "usb"), default="picamera2")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--confidence", type=float, default=0.10)
+    parser.add_argument("--min-conf", type=float, default=0.60)
     parser.add_argument("--stable-frames", type=int, default=3)
     parser.add_argument("--clear-frames", type=int, default=5)
     parser.add_argument("--cooldown", type=float, default=2.0)
@@ -115,27 +126,50 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("GPIO pins must be distinct BCM numbers in 0..27")
 
 
-def _draw_preview(frame_rgb: Any, boxes: list[Box], gate: BoxTriggerGate) -> Any:
+def _draw_preview(frame_rgb: Any, boxes: list[Box], gate: BoxTriggerGate, cls_result: ClassResult | None) -> Any:
     display = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
+    # Xác định màu sắc và nhãn theo kết quả phân loại bao bì
+    if cls_result is not None:
+        if cls_result.label == LABEL_OK:
+            box_color = (0, 220, 0)      # Xanh lá: Nguyên vẹn
+            cls_text = f"NGUYEN VEN ({cls_result.confidence*100:.0f}%)"
+        elif cls_result.label == LABEL_DEFECT:
+            box_color = (0, 0, 255)      # Đỏ: Móp vỡ / Rách
+            cls_text = f"MOP VO / RACH ({cls_result.confidence*100:.0f}%)"
+        else:
+            box_color = (0, 165, 255)    # Cam: Chưa rõ
+            cls_text = f"CHUA RO ({cls_result.confidence*100:.0f}%)"
+    else:
+        box_color = (0, 220, 0)
+        cls_text = ""
+
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy
-        cv2.rectangle(display, (x1, y1), (x2, y2), (0, 220, 0), 2)
+        cv2.rectangle(display, (x1, y1), (x2, y2), box_color, 2)
+        label_str = f"Box {box.confidence:.2f}"
+        if cls_text:
+            label_str += f" | {cls_text}"
         cv2.putText(
             display,
-            f"cardboard box {box.confidence:.2f}",
+            label_str,
             (x1, max(24, y1 - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (0, 220, 0),
+            0.55,
+            box_color,
             2,
         )
-    status = "ARMED" if gate.armed else "WAIT UNTIL BOX LEAVES"
+
+    status = "ARMED (CHO HOP)" if gate.armed else "DA CHOT! (CHO LAY HOP RA)"
+    status_str = f"{status} | boxes={len(boxes)} stable={gate.present_count}/{gate.stable_frames}"
+    if cls_text and len(boxes) > 0:
+        status_str += f" | Bao bi: {cls_text}"
     cv2.putText(
         display,
-        f"{status} | boxes={len(boxes)} stable={gate.present_count}/{gate.stable_frames}",
+        status_str,
         (16, 32),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
+        0.55,
         (0, 200, 255),
         2,
     )
@@ -185,9 +219,29 @@ def run(args: argparse.Namespace) -> int:
         padding=0.1,
         min_area_ratio=0.01,
     )
+
+    # Nạp mô hình phân loại bao bì
+    classifier = None
+    try:
+        classifier_path = _resolve_model(args.classifier)
+        card_path = _resolve_model(args.model_card) if args.model_card else ""
+        ai_cfg = AiCfg(
+            backend="onnx",
+            model_path=str(classifier_path),
+            model_card_path=str(card_path) if card_path else "",
+            min_confidence=args.min_conf,
+        )
+        classifier = OnnxClassifier(ai_cfg)
+        log.info("loaded packaging classifier: %s", classifier_path)
+    except Exception as e:
+        log.warning("could not load packaging classifier (%s); running detector only", e)
+
     with ExitStack() as resources:
         detector = BoxDetector(detector_cfg, threads=4)
         resources.callback(detector.close)
+        if classifier is not None:
+            resources.callback(classifier.close)
+
         resolution = (args.width, args.height)
         if args.camera == "picamera2":
             camera: Any = Picamera2Camera(
@@ -207,32 +261,53 @@ def run(args: argparse.Namespace) -> int:
         )
         events = 0
         log.info(
-            "ready detector=%s camera=%s GPIO led=%d buzzer=%d servo=%d dry_run=%s",
+            "ready detector=%s classifier=%s camera=%s GPIO led=%d buzzer=%d servo=%d dry_run=%s",
             detector_path,
+            args.classifier if classifier else "None",
             args.camera,
             args.led_pin,
             args.buzzer_pin,
             args.servo_pin,
             args.dry_run,
         )
+        latched_cls: ClassResult | None = None
         while True:
             try:
                 frame_rgb = camera.capture()
                 boxes = detector.detect(frame_rgb)
+
+                cls_res: ClassResult | None = None
+                if len(boxes) == 1 and classifier is not None:
+                    bx1, by1, bx2, by2 = boxes[0].xyxy
+                    crop = frame_rgb[by1:by2, bx1:bx2]
+                    if crop.size > 0:
+                        cls_res = classifier.predict(crop)
+
                 if gate.update(len(boxes), now=time.monotonic()):
                     events += 1
+                    latched_cls = cls_res
+                    label_desc = cls_res.label if cls_res else "UNKNOWN"
+                    conf_desc = cls_res.confidence if cls_res else 0.0
                     log.info(
-                        "BOX_TRIGGER event=%d confidence=%.3f",
+                        "BOX_TRIGGER event=%d box_conf=%.3f packaging=%s (%.1f%%)",
                         events,
                         boxes[0].confidence,
+                        label_desc,
+                        conf_desc * 100,
                     )
                     sequence.activate()
                     if args.max_events and events >= args.max_events:
                         return 0
+
+                if gate.armed:
+                    latched_cls = None
+
+                active_cls = latched_cls if not gate.armed else cls_res
+
                 if args.preview:
                     cv2.imshow(
                         "Pi smart sorter GPIO demo - Q/Esc quit",
-                        _draw_preview(frame_rgb, boxes, gate),
+                        _draw_preview(frame_rgb, boxes, gate, active_cls),
                     )
                     if cv2.waitKey(1) & 0xFF in {27, ord("q"), ord("Q")}:
                         return 0
