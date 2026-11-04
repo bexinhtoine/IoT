@@ -21,7 +21,8 @@ print("=" * 65)
 try:
     import gpiozero
     from gpiozero import LED, OutputDevice, AngularServo, Motor
-    print(f"[+] Đã nạp thành công gpiozero (phiên bản: {gpiozero.__version__})")
+    ver = getattr(gpiozero, "__version__", "sẵn sàng")
+    print(f"[+] Đã nạp thành công gpiozero ({ver})")
 except ImportError as e:
     print(f"[-] LỖI: Chưa cài gpiozero: {e}")
     print("    Chạy: sudo apt install python3-gpiozero python3-lgpio")
