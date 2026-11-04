@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["slow: test chạy chậm (bỏ qua bằng SORTER_SKIP_SLOW=1)"]

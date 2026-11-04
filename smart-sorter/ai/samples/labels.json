@@ -1,0 +1,12 @@
+{
+  "classes": [
+    "OK",
+    "DEFECT"
+  ],
+  "types": [
+    "tear",
+    "dent",
+    "crush",
+    "wet"
+  ]
+}

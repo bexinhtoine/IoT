@@ -1,0 +1,42 @@
+# Bí mật — không bao giờ commit
+*.key
+*.pem
+!*.example.pem
+!*.example.key
+secrets/
+certs/
+.env
+*.passphrase
+ota_private*.pem
+
+# Build
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Dữ liệu & model lớn
+dataset/
+*.onnx
+!ai/samples/*.onnx
+*.tflite
+*.pt
+*.joblib
+*.db
+*.db-wal
+*.db-shm
+/var/
+pi/run/
+defects/
+
+# IDE
+.vscode/
+.idea/
+*.swp

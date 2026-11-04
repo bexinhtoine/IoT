@@ -1,0 +1,36 @@
+# P-15 — Dịch vụ sorter-core trên Raspberry Pi (chạy bằng user sorter, tự khởi động lại khi lỗi)
+# Cài: sudo cp systemd/sorter.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now sorter
+[Unit]
+Description=Smart Logistics Sorter - sorter-core (Raspberry Pi)
+Documentation=file:///opt/sorter/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sorter
+Group=sorter
+SupplementaryGroups=video dialout gpio
+WorkingDirectory=/opt/sorter
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONUTF8=1
+ExecStart=/opt/sorter/venv/bin/python -m sorter.main --config /etc/sorter/config.yaml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# Hardening (S-07)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/sorter /var/log/sorter
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Cần /dev/serial0, /dev/video*, /dev/dma_heap, /dev/vchiq cho UART + picamera2 nên KHÔNG dùng PrivateDevices/DevicePolicy=closed
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+# Môi trường train/đánh giá trên laptop hoặc Colab (KHÔNG cài trên Pi — Pi chỉ cần pi/requirements.txt)
+numpy>=1.24
+opencv-python-headless>=4.8
+Pillow>=10.0
+scikit-learn>=1.3
+matplotlib>=3.7
+PyYAML>=6.0
+onnx>=1.14
+onnxruntime>=1.16
+# --- Đường train 1: notebook chính thức train_packaging_damage.ipynb (timm ConvNeXt-V2 -> distill MobileNetV4) ---
+# torch, torchvision, timm>=1.0.15, albumentations>=2.0.5, onnxscript, open_clip_torch, roboflow, kaggle, huggingface_hub
+# (notebook tự pip install ở ô 0)
+# --- Đường train 2: YOLOv8n-cls ---
+# ultralytics>=8.1
+# --- Đường train 3: MobileNetV2 Keras -> TFLite ---
+# tensorflow>=2.15

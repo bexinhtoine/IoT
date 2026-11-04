@@ -1,0 +1,8 @@
+# Khóa/chứng chỉ sinh ra — không commit
+pki/out/
+certs/
+*.key
+*_key.pem
+.env
+data/
+logs/

@@ -1,0 +1,52 @@
+# T-01 — ThingsBoard CE (bản tb-postgres: TB + PostgreSQL trong một container) cho laptop demo.
+#
+# Image chính thức: thingsboard/tb-postgres. Tag 3.7.0 là bản ổn định tại thời điểm viết — ĐỐI CHIẾU tag mới
+# nhất tại https://hub.docker.com/r/thingsboard/tb-postgres/tags (3.7.x / 3.8.x / 3.9.x đều dùng cùng biến môi trường
+# MQTT_SSL_* bên dưới; xem thingsboard.yml của đúng phiên bản: https://github.com/thingsboard/thingsboard/blob/<tag>/application/src/main/resources/thingsboard.yml
+# mục transport.mqtt.ssl).
+#
+# Cổng công bố: 8080 -> 9090 (web UI/REST) và 8883 (MQTT TLS). KHÔNG công bố 1883 (MQTT thường) ra máy chủ.
+# Chứng chỉ: thingsboard/certs/{server.pem, server_key.pem} (tạo bằng pki/make_server_cert.sh) mount read-only vào /config.
+#
+# Chạy:  cp .env.example .env  &&  mkdir -p data logs certs  &&  docker compose up -d
+# Lần đầu khởi động mất ~2-3 phút (tạo schema). Đăng nhập http://localhost:8080 bằng tài khoản mặc định
+# tenant@thingsboard.org / tenant — ĐỔI MẬT KHẨU NGAY (SETUP.md mục 5).
+services:
+  thingsboard:
+    image: thingsboard/tb-postgres:${TB_IMAGE_TAG:-3.7.0}
+    container_name: smart-sorter-tb
+    restart: unless-stopped
+    ports:
+      - "${TB_HTTP_PORT:-8080}:9090"     # web UI + REST API (HTTP trong LAN demo; HTTPS xem ghi chú SETUP.md)
+      - "${TB_MQTTS_PORT:-8883}:8883"    # MQTT qua TLS (mutual TLS với thiết bị)
+      # KHÔNG thêm "1883:1883" — T-01 yêu cầu không mở MQTT thường ra mạng.
+    environment:
+      TB_QUEUE_TYPE: in-memory
+      # --- MQTT TLS (transport.mqtt.ssl.* trong thingsboard.yml) ---
+      MQTT_SSL_ENABLED: "true"
+      MQTT_SSL_BIND_ADDRESS: 0.0.0.0
+      MQTT_SSL_BIND_PORT: "8883"
+      MQTT_SSL_PROTOCOL: TLSv1.2                 # phiên bản tối thiểu; TLS 1.3 vẫn được thương lượng nếu JVM hỗ trợ
+      MQTT_SSL_CREDENTIALS_TYPE: PEM             # PEM | KEYSTORE
+      MQTT_SSL_PEM_CERT: /config/server.pem      # cert server (có thể là chain: server + CA)
+      MQTT_SSL_PEM_KEY: /config/server_key.pem   # khóa riêng server (PKCS#8/EC PEM, không mật khẩu)
+      MQTT_SSL_PEM_KEY_PASSWORD: ""              # rỗng: khóa không mã hóa
+      MQTT_SSL_SKIP_VALIDITY_CHECK: "false"      # giữ false: không chấp nhận cert thiết bị hết hạn
+      # --- Thiết bị offline sau 30 s không có dữ liệu (T-05). Giá trị toàn cục; có thể ghi đè bằng
+      #     server attribute inactivityTimeout (ms) trên từng device — xem SETUP.md mục 2.
+      DEFAULT_INACTIVITY_TIMEOUT: "30"
+      # --- S-02: khóa tài khoản sau nhiều lần sai (đối chiếu tên biến với thingsboard.yml mục security.user_login) ---
+      MAX_FAILED_LOGIN_ATTEMPTS: "5"
+      USER_LOGIN_LOCK_NOTIFICATION_EMAIL: ""
+      # --- Giới hạn kích thước payload MQTT (byte); mặc định 65536 đủ cho ảnh ≤ 40 KB base64 ---
+      NETTY_MAX_PAYLOAD_SIZE: "65536"
+      # Mật khẩu mặc định của sysadmin/tenant KHÔNG đặt ở đây; đổi ngay sau lần đăng nhập đầu.
+    volumes:
+      - ./data:/data
+      - ./logs:/var/log/thingsboard
+      - ./certs:/config:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

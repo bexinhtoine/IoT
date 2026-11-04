@@ -1,0 +1,18 @@
+# Bố cục phân vùng OTA cho flash 4 MB (0x400000) — E-13 / O-12 / O-13
+#
+# Bootloader 0x1000..0x8000, bảng phân vùng ở 0x8000 (0x1000) → phân vùng đầu tiên bắt đầu 0x9000.
+# Phân vùng app phải căn 0x10000. Tổng dùng: 0x3E0000 (3,875 MB) ≤ 0x400000.
+#
+#   nvs      0x9000   + 0x6000   = 0xF000
+#   otadata  0xF000   + 0x2000   = 0x11000
+#   phy_init 0x11000  + 0x1000   = 0x12000
+#   (trống 0x12000..0x20000 — nếu bật NVS encryption, thêm:  nvs_keys, data, nvs_keys, 0x12000, 0x1000, encrypted)
+#   ota_0    0x20000  + 0x1E0000 = 0x200000
+#   ota_1    0x200000 + 0x1E0000 = 0x3E0000
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xF000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+ota_0,      app,  ota_0,    0x20000,  0x1E0000,
+ota_1,      app,  ota_1,    0x200000, 0x1E0000,

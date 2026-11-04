@@ -1,0 +1,17 @@
+/* T-06 — CSS cho Defect image card (dán vào tab CSS của widget) */
+.sorter-defect-card { display: flex; flex-direction: column; height: 100%; font-family: Roboto, Arial, sans-serif; color: #222; }
+.sorter-defect-header { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px; border-bottom: 1px solid #e0e0e0; }
+.sorter-defect-title { font-weight: 600; font-size: 14px; }
+.sorter-defect-time { font-size: 12px; color: #666; }
+.sorter-defect-body { display: flex; flex: 1; min-height: 0; gap: 10px; padding: 8px 10px; }
+.sorter-defect-imgwrap { position: relative; flex: 0 0 55%; display: flex; align-items: center; justify-content: center; background: #111; border-radius: 6px; overflow: hidden; }
+.sorter-defect-imgwrap img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.sorter-defect-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; }
+.sorter-defect-meta { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 6px; font-size: 13px; }
+.sorter-defect-meta > div { display: flex; justify-content: space-between; border-bottom: 1px dotted #ddd; padding-bottom: 2px; }
+.sorter-defect-meta .k { color: #666; }
+.sorter-defect-meta .v { font-weight: 600; text-align: right; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sorter-defect-meta .v.bad { color: #c62828; }
+.sorter-defect-meta .v.warn { color: #ef6c00; }
+.sorter-defect-meta .v.good { color: #2e7d32; }
+@media (max-width: 480px) { .sorter-defect-body { flex-direction: column; } .sorter-defect-imgwrap { flex-basis: 180px; } }

@@ -1,0 +1,80 @@
+[
+ {
+  "id": 1,
+  "name": "Hàng tốt, QR kho A",
+  "expected": "Khay A, cnt_a tăng",
+  "result": "PASS — SORT_A, cnt_a=1, latency 101 ms"
+ },
+ {
+  "id": 2,
+  "name": "Hàng tốt, QR kho B",
+  "expected": "Khay B, cnt_b tăng",
+  "result": "PASS — SORT_B, cnt_b=1, latency 79 ms"
+ },
+ {
+  "id": 3,
+  "name": "Hàng rách, QR hợp lệ",
+  "expected": "Khay Loại, ảnh lỗi + nhãn",
+  "result": "PASS — REJECT_DEFECT, nhãn tear, defect_image 13 KB"
+ },
+ {
+  "id": 4,
+  "name": "QR giả (chữ ký sai)",
+  "expected": "Khay Loại, alarm BAD_SIGNATURE",
+  "result": "PASS — REJECT_SECURITY, sự kiện QR_BAD_SIGNATURE [MAJOR]"
+ },
+ {
+  "id": 5,
+  "name": "DỪNG KHẨN CẤP từ dashboard (RPC emergencyStop)",
+  "expected": "Băng dừng, conveyor_state = ESTOP, rpc_log",
+  "result": "PASS — ESTOP qua RPC, rpc_audit + rpc_log; resetEstop → IDLE → RUNNING"
+ },
+ {
+  "id": "6a",
+  "name": "Secure OTA bản hợp lệ",
+  "expected": "Xác minh OK (phần ESP32 theo OTA_TEST.md)",
+  "result": "PASS — manifest v3 ECDSA hợp lệ đúng thứ tự O-10…O-12"
+ },
+ {
+  "id": "6b",
+  "name": "OTA sửa 1 byte / giả manifest",
+  "expected": "HASH_MISMATCH / SIGNATURE_INVALID",
+  "result": "PASS — cả hai bị từ chối đúng lý do; khôi phục OK"
+ },
+ {
+  "id": 7,
+  "name": "Quét lại QR đã dùng",
+  "expected": "Khay Loại, DUPLICATE",
+  "result": "PASS — REJECT_SECURITY/DUPLICATE, sự kiện QR_DUPLICATE"
+ },
+ {
+  "id": 8,
+  "name": "E-stop vật lý",
+  "expected": "Dừng ngay; reset khi còn bấm bị từ chối",
+  "result": "PASS — ESTOP(PHYSICAL); reset khi còn bấm → BAD_STATE; nhả + resetEstop → IDLE"
+ },
+ {
+  "id": 9,
+  "name": "Đăng nhập Viewer rồi Admin (2FA)",
+  "expected": "Viewer chỉ xem; Admin nhập 2FA",
+  "result": "MANUAL — kiểm tra tay trên ThingsBoard"
+ },
+ {
+  "id": 10,
+  "name": "Mô phỏng tấn công",
+  "expected": "anomaly_flag / alarm",
+  "result": "PASS — RPC lạ ×3 + 8 QR giả → RULE_QR_FORGERY + RULE_RPC_UNKNOWN (CRITICAL); IF cần model đã train"
+ },
+ {
+  "id": 11,
+  "name": "Rút dây UART khi băng chạy",
+  "expected": "FAULT LINK_LOST sau 2 s",
+  "result": "PASS — FAULT sau 2,0 s, Pi ghi ESP_LINK_LOST; reset → IDLE → RUNNING"
+ },
+ {
+  "id": 12,
+  "name": "OTA ký hợp lệ nhưng phiên bản cũ",
+  "expected": "ROLLBACK_REJECTED",
+  "result": "PASS — manifest v2 hợp lệ nhưng ≤ v3 → ROLLBACK_REJECTED"
+ }
+]

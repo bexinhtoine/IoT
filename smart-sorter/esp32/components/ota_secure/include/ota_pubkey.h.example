@@ -1,0 +1,23 @@
+/* O-10 — Public key ECDSA P-256 dùng xác minh chữ ký manifest OTA.
+ *
+ * FILE MẪU. App Secure OTA (MODULE P7, O-02) xuất file thật `ota_pubkey.h` (cùng định dạng) từ cặp khóa
+ * của release_manager; copy vào esp32/components/ota_secure/include/ota_pubkey.h rồi build lại.
+ * Khi chưa có file thật, ota_secure.c dùng file mẫu này. Khóa dưới đây là khóa P-256 sinh ngẫu nhiên,
+ * private key đã bị hủy — chỉ để build/parse được, KHÔNG dùng để phát hành (mọi chữ ký thật sẽ bị
+ * SIGNATURE_INVALID).
+ *
+ * Định dạng: PEM SubjectPublicKeyInfo (openssl ec -pubout), chuỗi C có "\n" và kết thúc NUL
+ * (mbedtls_pk_parse_public_key nhận sizeof(OTA_PUBKEY_PEM) — tính cả NUL).
+ */
+#ifndef OTA_PUBKEY_H
+#define OTA_PUBKEY_H
+
+#define OTA_PUBKEY_ID "ota-p256-example"
+
+static const char OTA_PUBKEY_PEM[] =
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZGtYwkzyYvGaIY0KlRTn5pWuzhx4\n"
+    "+R1DDhAy/4u+KPEcXaoPJrMJL0+Tu+x7wHgwfJ0DDHdLFGefqcQp7zxXQA==\n"
+    "-----END PUBLIC KEY-----\n";
+
+#endif /* OTA_PUBKEY_H */

@@ -1,0 +1,9 @@
+# Cấu hình OTA cho ESP32 — namespace "ota_cfg" (O-08). Copy thành wifi_ota.csv (bị .gitignore? KHÔNG — hãy
+# tự thêm "esp32/nvs/wifi_ota.csv" vào .gitignore cục bộ hoặc không commit; file chứa mật khẩu Wi-Fi).
+# Định dạng của nvs_partition_gen.py: key,type,encoding,value
+key,type,encoding,value
+ota_cfg,namespace,,
+ssid,data,string,TEN_WIFI_CUA_NHOM
+pass,data,string,MAT_KHAU_WIFI
+url,data,string,https://192.168.1.10:8443/ota
+max_ver,data,u32,0

@@ -1,0 +1,258 @@
+# =====================================================================
+# Smart Logistics Sorter — NGUỒN DUY NHẤT của giao thức UART Pi <-> ESP32
+# (đặc tả phần 4.2, 4.5; mã chức năng E-10, P-07)
+#
+# gen.py đọc file này và sinh:
+#   esp32/components/protocol/include/protocol_gen.h
+#   pi/sorter/protocol_gen.py
+# KHÔNG sửa tay 2 file sinh ra; sửa ở đây rồi chạy `make gen-protocol`.
+# =====================================================================
+
+protocol_version: 1
+
+frame:
+  sof: [0xAA, 0x55]        # 2 byte đầu khung
+  ver: 0x01                # VER
+  max_payload: 64          # LEN tối đa; khung LEN > 64 bị bỏ
+  crc:
+    name: CRC-16/CCITT-FALSE
+    poly: 0x1021
+    init: 0xFFFF
+    check_123456789: 0x29B1  # CRC của chuỗi ASCII "123456789"
+    covers: "VER, SEQ, TYPE, LEN, PAYLOAD"
+    byte_order: little      # CRC16 ghi vào khung theo little-endian
+  ack_timeout_ms: 200
+  max_retries: 3
+  no_ack_types: [ACK, NACK, PONG, STATUS]   # các khung không cần ACK
+  reply_instead_of_ack:
+    PING: PONG
+    GET_STATUS: STATUS
+
+# ---------------------------------------------------------------------
+# Mã trạng thái máy trạng thái ESP32 (E-01)
+# ---------------------------------------------------------------------
+states:
+  BOOT: 0
+  IDLE: 1
+  RUNNING: 2
+  DETECTED: 3
+  SORTING: 4
+  ESTOP: 5
+  FAULT: 6
+  OTA: 7
+
+# Mã lỗi NACK
+nack_errors:
+  CRC: 1
+  UNKNOWN_TYPE: 2
+  BAD_STATE: 3
+  BAD_PARAM: 4
+  BAD_LEN: 5
+
+# Mã fault (EVT_FAULT)
+fault_codes:
+  DECISION_TIMEOUT: 1
+  LINK_LOST: 2
+  SENSOR: 3
+  WDT_RESET: 4
+
+# Nguồn E-stop (EVT_ESTOP)
+estop_sources:
+  PHYSICAL: 1
+  REMOTE: 2
+
+# SORT.target
+sort_targets:
+  A: 1
+  B: 2
+  REJECT: 3
+
+# SORT.reason
+sort_reasons:
+  OK: 0
+  DEFECT: 1
+  SECURITY: 2
+  FAILSAFE: 3
+
+# OTA stage / reason (phần 4.5)
+ota_stages:
+  CHECKING: 1
+  DOWNLOADING: 2
+  VERIFIED: 3
+  REJECTED: 4
+  REBOOTING: 5
+  SUCCESS: 6
+  ROLLED_BACK: 7
+  UP_TO_DATE: 8
+
+ota_reasons:
+  NONE: 0
+  SIGNATURE_INVALID: 1
+  HASH_MISMATCH: 2
+  ROLLBACK_REJECTED: 3
+  MODEL_MISMATCH: 4
+  TLS_ERROR: 5
+  DOWNLOAD_ERROR: 6
+  SELFTEST_FAILED: 7
+  BAD_STATE: 8
+
+# ---------------------------------------------------------------------
+# Bảng loại khung. direction: pi2esp | esp2pi
+# payload: danh sách trường theo thứ tự, kiểu u8/u16/u32 (little-endian)
+# allowed_states: trạng thái ESP32 được phép nhận (chỉ với pi2esp); "ANY" = mọi trạng thái
+# ---------------------------------------------------------------------
+messages:
+  # ---- Pi -> ESP32 ----
+  - name: PING
+    code: 0x01
+    direction: pi2esp
+    payload: []
+    allowed_states: [ANY]
+    doc: "Watchdog liên kết, Pi gửi mỗi 500 ms; ESP32 trả PONG"
+
+  - name: START
+    code: 0x10
+    direction: pi2esp
+    payload:
+      - {name: speed, type: u8, min: 30, max: 100, doc: "tốc độ băng %"}
+    allowed_states: [IDLE]
+
+  - name: STOP
+    code: 0x11
+    direction: pi2esp
+    payload: []
+    allowed_states: [IDLE, RUNNING]
+
+  - name: ESTOP
+    code: 0x12
+    direction: pi2esp
+    payload: []
+    allowed_states: [ANY]
+
+  - name: ESTOP_RESET
+    code: 0x13
+    direction: pi2esp
+    payload: []
+    allowed_states: [ESTOP, FAULT]
+    doc: "Chỉ chấp nhận khi nút E-stop đã nhả"
+
+  - name: SORT
+    code: 0x20
+    direction: pi2esp
+    payload:
+      - {name: target, type: u8, enum: sort_targets}
+      - {name: reason, type: u8, enum: sort_reasons}
+      - {name: pkg_seq, type: u16}
+    allowed_states: [DETECTED]
+
+  - name: SET_PARAM
+    code: 0x40
+    direction: pi2esp
+    payload:
+      - {name: param_id, type: u8}
+      - {name: value, type: u16}
+    allowed_states: [IDLE]
+
+  - name: OTA_CHECK
+    code: 0x50
+    direction: pi2esp
+    payload: []
+    allowed_states: [IDLE]
+
+  - name: GET_STATUS
+    code: 0x60
+    direction: pi2esp
+    payload: []
+    allowed_states: [ANY]
+
+  # ---- ESP32 -> Pi ----
+  - name: ACK
+    code: 0x80
+    direction: esp2pi
+    payload:
+      - {name: acked_seq, type: u8}
+
+  - name: NACK
+    code: 0x81
+    direction: esp2pi
+    payload:
+      - {name: acked_seq, type: u8}
+      - {name: err, type: u8, enum: nack_errors}
+
+  - name: PONG
+    code: 0x82
+    direction: esp2pi
+    payload:
+      - {name: state, type: u8, enum: states}
+
+  - name: EVT_PKG_DETECTED
+    code: 0x90
+    direction: esp2pi
+    payload:
+      - {name: pkg_seq, type: u16}
+
+  - name: EVT_SORT_DONE
+    code: 0x91
+    direction: esp2pi
+    payload:
+      - {name: pkg_seq, type: u16}
+      - {name: target, type: u8, enum: sort_targets}
+
+  - name: EVT_ESTOP
+    code: 0x92
+    direction: esp2pi
+    payload:
+      - {name: source, type: u8, enum: estop_sources}
+
+  - name: EVT_ESTOP_CLEARED
+    code: 0x93
+    direction: esp2pi
+    payload: []
+
+  - name: EVT_FAULT
+    code: 0x94
+    direction: esp2pi
+    payload:
+      - {name: code, type: u8, enum: fault_codes}
+
+  - name: EVT_OTA_STATUS
+    code: 0xA0
+    direction: esp2pi
+    payload:
+      - {name: stage, type: u8, enum: ota_stages}
+      - {name: reason, type: u8, enum: ota_reasons}
+      - {name: progress, type: u8}
+      - {name: version_code, type: u32}
+
+  - name: STATUS
+    code: 0xA1
+    direction: esp2pi
+    payload:
+      - {name: state, type: u8, enum: states}
+      - {name: fw_version_code, type: u32}
+      - {name: uptime_s, type: u32}
+      - {name: pkg_count, type: u16}
+      - {name: crc_err, type: u16}
+      - {name: reset_reason, type: u8}
+
+# ---------------------------------------------------------------------
+# Tham số SET_PARAM (E-11). Ngoài danh sách hoặc ngoài miền -> NACK BAD_PARAM
+# ---------------------------------------------------------------------
+params:
+  - {id: 1,  name: belt_speed,          unit: "%",  min: 30,   max: 100,   default: 60}
+  - {id: 2,  name: servo_a_home,        unit: deg,  min: 0,    max: 180,   default: 0}
+  - {id: 3,  name: servo_a_divert,      unit: deg,  min: 0,    max: 180,   default: 45}
+  - {id: 4,  name: servo_b_home,        unit: deg,  min: 0,    max: 180,   default: 0}
+  - {id: 5,  name: servo_b_divert,      unit: deg,  min: 0,    max: 180,   default: 45}
+  - {id: 6,  name: t_clear_a,           unit: ms,   min: 500,  max: 8000,  default: 2500}
+  - {id: 7,  name: t_clear_b,           unit: ms,   min: 500,  max: 8000,  default: 3500}
+  - {id: 8,  name: t_clear_reject,      unit: ms,   min: 500,  max: 10000, default: 5000}
+  - {id: 9,  name: t_rearm,             unit: ms,   min: 0,    max: 3000,  default: 500}
+  - {id: 10, name: t_decision_timeout,  unit: ms,   min: 1000, max: 10000, default: 3000}
+  - {id: 11, name: hcsr04_threshold,    unit: mm,   min: 20,   max: 400,   default: 80}
+
+# Hằng thời gian dùng chung
+timing:
+  ping_interval_ms: 500
+  link_timeout_ms: 2000
+  settle_ms_default: 150

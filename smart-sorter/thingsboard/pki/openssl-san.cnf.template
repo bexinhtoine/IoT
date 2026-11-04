@@ -1,0 +1,18 @@
+# Mẫu extension cho cert server (ThingsBoard MQTT 8883 / máy chủ OTA 8443).
+# Các script make_server_cert.sh / make_ota_server_cert.sh thay @SAN@ bằng danh sách
+# "DNS:tb.local,IP:192.168.1.10,..." rồi dùng với `openssl x509 -extfile`.
+[ server_ext ]
+basicConstraints        = critical,CA:FALSE
+keyUsage                = critical,digitalSignature,keyEncipherment,keyAgreement
+extendedKeyUsage        = serverAuth
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid,issuer
+subjectAltName          = @SAN@
+
+# Cert thiết bị (Pi) — mutual TLS, ThingsBoard nhận diện theo CN
+[ client_ext ]
+basicConstraints        = critical,CA:FALSE
+keyUsage                = critical,digitalSignature,keyAgreement
+extendedKeyUsage        = clientAuth
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid,issuer

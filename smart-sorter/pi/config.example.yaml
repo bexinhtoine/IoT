@@ -1,0 +1,67 @@
+# /etc/sorter/config.yaml — cấu hình sorter-core trên Raspberry Pi 4 (đặc tả 4.6)
+# Đường dẫn tương đối được tính từ thư mục chứa file này.
+device:
+  name: sorter-pi-01
+  demo_mode: true          # cho phép RPC resetUsedCodes
+  sw_version: "1.0.0"
+  qr_format_version: "1"
+
+camera:
+  source: picamera2        # camera CSI qua Picamera2 (không dùng USB)
+  resolution: [1280, 960]
+  settle_ms: 150           # chờ băng ổn định trước khi chụp
+  max_qr_frames: 3
+  roi: [320, 160, 640, 640]   # x, y, w, h — vùng hộp dưới camera
+  lock_after_s: 2.0        # khóa AE/AWB sau 2 s để ảnh đồng đều
+  hflip: false
+  vflip: false
+
+qr:
+  hmac_key_file: /etc/sorter/secrets/qr_hmac.key   # 32 byte, quyền 600, tạo bằng tools/make_hmac_key.py
+  max_age_days: 30
+  future_skew_s: 300
+
+ai:
+  backend: onnx            # dummy | onnx | tflite
+  model_path: /opt/sorter/models/packaging_cls.onnx
+  labels_path: /opt/sorter/models/labels.json
+  model_card_path: /opt/sorter/models/model_card.json   # nếu có: input_size + defect_threshold lấy từ đây
+  input_size: 224
+  min_confidence: 0.6
+  threads: 4
+
+uart:
+  port: /dev/serial0
+  baud: 115200
+  ack_timeout_ms: 200
+  retries: 3
+  ping_interval_ms: 500
+
+thingsboard:
+  enabled: true
+  host: tb.local
+  port: 8883
+  ca_cert: /etc/sorter/certs/ca.pem
+  client_cert: /etc/sorter/certs/device.pem
+  client_key: /etc/sorter/certs/device.key
+  health_interval_s: 10
+  image_max_kb: 40
+  queue_max: 1000
+
+rpc:
+  rate_limit: {count: 5, window_s: 10}
+  esp_timeout_s: 2.0
+
+storage:
+  db_path: /var/lib/sorter/sorter.db
+  defect_dir: /var/lib/sorter/defects
+  max_defect_images: 500
+  log_dir: /var/log/sorter
+
+anomaly:
+  enabled: true
+  window_s: 10
+  model_path: /opt/sorter/models/anomaly_if.joblib
+  cooldown_s: 60
+
+belt_speed: 60

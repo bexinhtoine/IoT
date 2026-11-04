@@ -1,0 +1,31 @@
+<!-- T-06 "Khối điều khiển" — widget tùy chỉnh ThingsBoard (Widget type: Control widget / RPC).
+     Target device = datasource/alias "Sorter" (sorter-pi-01). Dashboard Giám sát (Viewer) KHÔNG đặt widget này. -->
+<div class="scp">
+  <button type="button" class="scp-estop" id="scp-estop" title="Gửi emergencyStop ngay, không hỏi lại">
+    DỪNG KHẨN CẤP
+  </button>
+
+  <div class="scp-row">
+    <label class="scp-speed">Tốc độ băng (30–100)
+      <input type="number" id="scp-speed" min="30" max="100" step="1" value="60" />
+    </label>
+    <button type="button" class="scp-btn primary" id="scp-start">Start</button>
+    <button type="button" class="scp-btn" id="scp-stop">Stop</button>
+  </div>
+
+  <div class="scp-row">
+    <button type="button" class="scp-btn warn" id="scp-reset-estop">Reset E-stop</button>
+    <button type="button" class="scp-btn" id="scp-reset-counters">Reset bộ đếm</button>
+    <button type="button" class="scp-btn warn" id="scp-reset-codes">Reset mã đã dùng</button>
+    <button type="button" class="scp-btn" id="scp-ota">Kiểm tra cập nhật FW</button>
+    <button type="button" class="scp-btn" id="scp-status">Trạng thái</button>
+  </div>
+
+  <div class="scp-result" id="scp-result">
+    <div class="scp-result-head">
+      <span id="scp-result-title">Kết quả RPC</span>
+      <span class="scp-user" id="scp-user"></span>
+    </div>
+    <pre id="scp-result-body">Chưa gửi lệnh nào.</pre>
+  </div>
+</div>

@@ -1,0 +1,2 @@
+# Công cụ REST cho ThingsBoard (rpc_cli.py, tb_provision.py) — chạy trên laptop
+requests>=2.31

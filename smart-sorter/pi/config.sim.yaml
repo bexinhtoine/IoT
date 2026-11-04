@@ -1,0 +1,51 @@
+# Cấu hình chế độ MÔ PHỎNG trên laptop (P-14): không cần camera, ESP32, ThingsBoard.
+# Chạy: cd pi && python -m sorter.main --sim --config config.sim.yaml
+device:
+  name: sorter-pi-sim
+  demo_mode: true
+  sw_version: "1.0.0"
+
+camera:
+  source: folder
+  folder: tests/fixtures/images       # ảnh sinh bởi tests/fixtures/make_images.py
+  resolution: [1280, 960]
+  settle_ms: 10
+  max_qr_frames: 3
+  roi: [320, 160, 640, 640]
+
+qr:
+  hmac_key_file: tests/fixtures/qr_hmac.key   # khóa chỉ dùng cho test
+  max_age_days: 3650
+  future_skew_s: 300
+
+ai:
+  backend: dummy            # DummyClassifier đọc nhãn từ tên file ảnh
+  min_confidence: 0.6
+
+uart:
+  port: sim                 # FakeEsp32 trong tiến trình
+  baud: 115200
+  ack_timeout_ms: 200
+  retries: 3
+  ping_interval_ms: 500
+
+thingsboard:
+  enabled: false            # LogTelemetrySink
+  health_interval_s: 10
+  image_max_kb: 40
+
+rpc:
+  rate_limit: {count: 5, window_s: 10}
+
+storage:
+  db_path: run/sorter.db
+  defect_dir: run/defects
+  max_defect_images: 50
+  log_dir: run/log
+
+anomaly:
+  enabled: false
+  window_s: 10
+  model_path: run/anomaly_if.joblib
+
+belt_speed: 60

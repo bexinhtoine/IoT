@@ -1,0 +1,250 @@
+{
+  "_comment": "AUTO-GENERATED bởi gen_vectors.py — dùng chung cho pytest (Python) và host_test.c (C)",
+  "crc_check": {
+    "input_ascii": "123456789",
+    "expected": "0x29B1"
+  },
+  "vectors": [
+    {
+      "name": "ping_no_payload",
+      "note": "khung không payload",
+      "chunks": [
+        "aa550100010045c1"
+      ],
+      "expected_frames": [
+        {
+          "seq": 0,
+          "type": 1,
+          "payload": ""
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "start_speed60",
+      "note": "",
+      "chunks": [
+        "aa55010110013c644a"
+      ],
+      "expected_frames": [
+        {
+          "seq": 1,
+          "type": 16,
+          "payload": "3c"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "sort_a_ok_seq42",
+      "note": "pkg_seq little-endian",
+      "chunks": [
+        "aa55012a200401000201ac57"
+      ],
+      "expected_frames": [
+        {
+          "seq": 42,
+          "type": 32,
+          "payload": "01000201"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "set_param_seq255_wrap",
+      "note": "",
+      "chunks": [
+        "aa5501ff400306c409bd6e"
+      ],
+      "expected_frames": [
+        {
+          "seq": 255,
+          "type": 64,
+          "payload": "06c409"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "status_frame",
+      "note": "",
+      "chunks": [
+        "aa550109a10e0202000100100e00000c00010003ddd0"
+      ],
+      "expected_frames": [
+        {
+          "seq": 9,
+          "type": 161,
+          "payload": "0202000100100e00000c00010003"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "two_frames_back_to_back",
+      "note": "2 khung dính liền trong 1 lần feed",
+      "chunks": [
+        "aa550103900207000a94aa550104800103a449"
+      ],
+      "expected_frames": [
+        {
+          "seq": 3,
+          "type": 144,
+          "payload": "0700"
+        },
+        {
+          "seq": 4,
+          "type": 128,
+          "payload": "03"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "garbage_before_sof",
+      "note": "rác trước SOF, gồm cả AA không theo sau bởi 55",
+      "chunks": [
+        "0011aa2255aa550100010045c1"
+      ],
+      "expected_frames": [
+        {
+          "seq": 0,
+          "type": 1,
+          "payload": ""
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "bad_crc_dropped",
+      "note": "khung sai CRC bị bỏ, khung sau vẫn nhận",
+      "chunks": [
+        "aa55012a200401000201aca8",
+        "aa550100010045c1"
+      ],
+      "expected_frames": [
+        {
+          "seq": 0,
+          "type": 1,
+          "payload": ""
+        }
+      ],
+      "expected_crc_errors": 1,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "len_too_large",
+      "note": "LEN=65 > 64 bị bỏ, tự dò lại SOF",
+      "chunks": [
+        "aa550105204100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "aa550100010045c1"
+      ],
+      "expected_frames": [
+        {
+          "seq": 0,
+          "type": 1,
+          "payload": ""
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 1
+    },
+    {
+      "name": "split_across_feeds",
+      "note": "khung bị cắt đôi qua 2 lần feed",
+      "chunks": [
+        "aa55012a2004",
+        "01000201ac57"
+      ],
+      "expected_frames": [
+        {
+          "seq": 42,
+          "type": 32,
+          "payload": "01000201"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "byte_by_byte",
+      "note": "feed từng byte một",
+      "chunks": [
+        "aa",
+        "55",
+        "01",
+        "01",
+        "10",
+        "01",
+        "3c",
+        "64",
+        "4a"
+      ],
+      "expected_frames": [
+        {
+          "seq": 1,
+          "type": 16,
+          "payload": "3c"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "max_payload_64_unknown_type",
+      "note": "LEN=64 hợp lệ; TYPE lạ vẫn giải mã ở tầng khung",
+      "chunks": [
+        "aa55010a7f40000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f4b40"
+      ],
+      "expected_frames": [
+        {
+          "seq": 10,
+          "type": 127,
+          "payload": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "bad_version_dropped",
+      "note": "VER != 1 bị bỏ (đếm ver_errors)",
+      "chunks": [
+        "aa550200010045c1",
+        "aa550100010045c1"
+      ],
+      "expected_frames": [
+        {
+          "seq": 0,
+          "type": 1,
+          "payload": ""
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    },
+    {
+      "name": "sof_bytes_inside_payload",
+      "note": "AA 55 trong payload không làm lệch bộ giải mã",
+      "chunks": [
+        "aa5501059002aa55fd38"
+      ],
+      "expected_frames": [
+        {
+          "seq": 5,
+          "type": 144,
+          "payload": "aa55"
+        }
+      ],
+      "expected_crc_errors": 0,
+      "expected_len_errors": 0
+    }
+  ]
+}
