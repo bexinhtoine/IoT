@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Camera -> one stable cardboard box -> LED + buzzer + servo demo on Raspberry Pi.
+"""Camera -> one stable cardboard box -> LED + buzzer + servo + motor demo on Raspberry Pi.
 
 Tích hợp:
   1. Box Detector (YOLO-World ONNX): Phát hiện hộp hàng
   2. Packaging Classifier (MobileNetV4 ONNX): Phân loại hộp NGUYÊN VẸN (Normal) hay MÓP VỠ / RÁCH (Damage)
-  3. GPIO Actuator: Kích hoạt LED, còi, servo
+  3. GPIO Actuators: Điều khiển Đèn LED, Còi Buzzer, Động cơ Servo và Động cơ Băng chuyền (L298N)
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def _resolve_model(value: str) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Pi camera box detector & packaging classifier demo with direct LED, active buzzer and servo outputs"
+        description="Pi camera box detector & packaging classifier demo with direct LED, active buzzer, servo and motor outputs"
     )
     parser.add_argument("--detector", default="ai/models/box_detector.onnx")
     parser.add_argument("--classifier", default="ai/models/packaging_cls.onnx")
@@ -86,9 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stable-frames", type=int, default=3)
     parser.add_argument("--clear-frames", type=int, default=5)
     parser.add_argument("--cooldown", type=float, default=2.0)
-    parser.add_argument("--led-pin", type=int, default=17, help="BCM number")
-    parser.add_argument("--buzzer-pin", type=int, default=27, help="BCM number")
-    parser.add_argument("--servo-pin", type=int, default=18, help="BCM number")
+    parser.add_argument("--led-pin", type=int, default=17, help="BCM number (default: GPIO17)")
+    parser.add_argument("--buzzer-pin", type=int, default=27, help="BCM number (default: GPIO27)")
+    parser.add_argument("--servo-pin", type=int, default=18, help="BCM number (default: GPIO18)")
+    parser.add_argument("--motor-in1", type=int, default=None, help="BCM pin for motor IN1 driver L298N (optional)")
+    parser.add_argument("--motor-in2", type=int, default=None, help="BCM pin for motor IN2 driver L298N (optional)")
+    parser.add_argument("--motor-en", type=int, default=None, help="BCM pin for motor ENA driver L298N (optional)")
     parser.add_argument("--home-angle", type=float, default=0.0)
     parser.add_argument("--active-angle", type=float, default=45.0)
     parser.add_argument("--buzzer-seconds", type=float, default=0.12)
@@ -108,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="run LED, buzzer and servo once without camera or model",
+        help="run LED, buzzer, servo and motor once without camera or model",
     )
     parser.add_argument("--log-level", default="INFO")
     return parser
@@ -121,24 +124,26 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("confidence must be in (0, 1]")
     if args.max_events < 0:
         raise ValueError("max-events must be non-negative")
-    pins = (args.led_pin, args.buzzer_pin, args.servo_pin)
-    if any(pin < 0 or pin > 27 for pin in pins) or len(set(pins)) != 3:
+    pins = [args.led_pin, args.buzzer_pin, args.servo_pin]
+    for m_pin in (args.motor_in1, args.motor_in2, args.motor_en):
+        if m_pin is not None:
+            pins.append(m_pin)
+    if any(pin < 0 or pin > 27 for pin in pins) or len(set(pins)) != len(pins):
         raise ValueError("GPIO pins must be distinct BCM numbers in 0..27")
 
 
 def _draw_preview(frame_rgb: Any, boxes: list[Box], gate: BoxTriggerGate, cls_result: ClassResult | None) -> Any:
     display = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-    # Xác định màu sắc và nhãn theo kết quả phân loại bao bì
     if cls_result is not None:
         if cls_result.label == LABEL_OK:
-            box_color = (0, 220, 0)      # Xanh lá: Nguyên vẹn
+            box_color = (0, 220, 0)
             cls_text = f"NGUYEN VEN ({cls_result.confidence*100:.0f}%)"
         elif cls_result.label == LABEL_DEFECT:
-            box_color = (0, 0, 255)      # Đỏ: Móp vỡ / Rách
+            box_color = (0, 0, 255)
             cls_text = f"MOP VO / RACH ({cls_result.confidence*100:.0f}%)"
         else:
-            box_color = (0, 165, 255)    # Cam: Chưa rõ
+            box_color = (0, 165, 255)
             cls_text = f"CHUA RO ({cls_result.confidence*100:.0f}%)"
     else:
         box_color = (0, 220, 0)
@@ -184,6 +189,9 @@ def _make_sequence(args: argparse.Namespace) -> DemoActuatorSequence:
             led_pin=args.led_pin,
             buzzer_pin=args.buzzer_pin,
             servo_pin=args.servo_pin,
+            motor_in1=args.motor_in1,
+            motor_in2=args.motor_in2,
+            motor_en=args.motor_en,
             home_angle=args.home_angle,
             use_pigpio=args.pigpio,
         )
@@ -204,7 +212,7 @@ def run(args: argparse.Namespace) -> int:
         sequence = _make_sequence(args)
         try:
             sequence.activate()
-            log.info("actuator self-test completed")
+            log.info("actuator self-test completed (LED, buzzer, servo, motor)")
             return 0
         finally:
             sequence.close()
@@ -220,7 +228,6 @@ def run(args: argparse.Namespace) -> int:
         min_area_ratio=0.01,
     )
 
-    # Nạp mô hình phân loại bao bì
     classifier = None
     try:
         classifier_path = _resolve_model(args.classifier)
@@ -261,13 +268,14 @@ def run(args: argparse.Namespace) -> int:
         )
         events = 0
         log.info(
-            "ready detector=%s classifier=%s camera=%s GPIO led=%d buzzer=%d servo=%d dry_run=%s",
+            "ready detector=%s classifier=%s camera=%s GPIO led=%d buzzer=%d servo=%d motor=%s dry_run=%s",
             detector_path,
             args.classifier if classifier else "None",
             args.camera,
             args.led_pin,
             args.buzzer_pin,
             args.servo_pin,
+            f"in1={args.motor_in1},in2={args.motor_in2}" if args.motor_in1 is not None else "None",
             args.dry_run,
         )
         latched_cls: ClassResult | None = None

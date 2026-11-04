@@ -22,6 +22,8 @@ class ActuatorDriver(Protocol):
 
     def set_servo_angle(self, angle: float) -> None: ...
 
+    def set_motor(self, enabled: bool, forward: bool = True) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -59,25 +61,31 @@ class DemoActuatorSequence:
         self.safe_state()
 
     def safe_state(self) -> None:
-        """Force finite outputs: buzzer/LED off and servo at home."""
+        """Force finite outputs: buzzer/LED off, motor stopped, and servo at home."""
         self.driver.set_buzzer(False)
         self.driver.set_led(False)
         self.driver.set_servo_angle(self.home_angle)
+        if hasattr(self.driver, "set_motor"):
+            self.driver.set_motor(False)
 
     def activate(self) -> None:
-        """Run one bounded indication and servo cycle."""
+        """Run one bounded indication, servo and motor cycle."""
         if self._closed:
             raise RuntimeError("actuator sequence is closed")
         try:
             self.driver.set_led(True)
             self.driver.set_buzzer(True)
             self.driver.set_servo_angle(self.active_angle)
+            if hasattr(self.driver, "set_motor"):
+                self.driver.set_motor(True)
             self._sleep(self.timing.buzzer_s)
             self.driver.set_buzzer(False)
             self._sleep(max(0.0, self.timing.servo_hold_s - self.timing.buzzer_s))
             self.driver.set_servo_angle(self.home_angle)
             self._sleep(self.timing.servo_return_s)
             self.driver.set_led(False)
+            if hasattr(self.driver, "set_motor"):
+                self.driver.set_motor(False)
         except BaseException:
             self.safe_state()
             raise
@@ -140,7 +148,6 @@ class BoxTriggerGate:
             return False
 
         self._present_count = 0
-        # Multiple boxes are not a clear scene and must never rearm the gate.
         if box_count == 0:
             self._clear_count += 1
             if (
@@ -169,6 +176,9 @@ class LoggingActuatorDriver:
     def set_servo_angle(self, angle: float) -> None:
         self._emit(f"SERVO={angle:.1f}deg")
 
+    def set_motor(self, enabled: bool, forward: bool = True) -> None:
+        self._emit(f"MOTOR={'RUN' if enabled else 'STOP'}")
+
     def close(self) -> None:
         self._emit("GPIO=CLOSED")
 
@@ -182,11 +192,14 @@ class GpioZeroActuatorDriver:
         led_pin: int = 17,
         buzzer_pin: int = 27,
         servo_pin: int = 18,
+        motor_in1: int | None = None,
+        motor_in2: int | None = None,
+        motor_en: int | None = None,
         home_angle: float = 0.0,
         use_pigpio: bool = False,
     ) -> None:
         try:
-            from gpiozero import LED, AngularServo, OutputDevice
+            from gpiozero import LED, AngularServo, OutputDevice, Motor
         except ImportError as error:  # pragma: no cover - Raspberry Pi dependency
             raise RuntimeError("gpiozero is required on Raspberry Pi") from error
 
@@ -216,6 +229,12 @@ class GpioZeroActuatorDriver:
             max_pulse_width=0.0025,
             **kwargs,
         )
+        self._motor = None
+        if motor_in1 is not None:
+            if motor_in2 is not None:
+                self._motor = Motor(forward=motor_in1, backward=motor_in2, enable=motor_en, **kwargs)
+            else:
+                self._motor = OutputDevice(motor_in1, initial_value=False, **kwargs)
 
     def set_led(self, enabled: bool) -> None:
         self._led.on() if enabled else self._led.off()
@@ -226,9 +245,22 @@ class GpioZeroActuatorDriver:
     def set_servo_angle(self, angle: float) -> None:
         self._servo.angle = angle
 
+    def set_motor(self, enabled: bool, forward: bool = True) -> None:
+        if self._motor is not None:
+            if hasattr(self._motor, "forward"):
+                if enabled:
+                    self._motor.forward() if forward else self._motor.backward()
+                else:
+                    self._motor.stop()
+            else:
+                self._motor.on() if enabled else self._motor.off()
+
     def close(self) -> None:
         self._buzzer.off()
         self._led.off()
+        self.set_motor(False)
         self._servo.close()
         self._buzzer.close()
         self._led.close()
+        if self._motor is not None:
+            self._motor.close()
