@@ -77,6 +77,26 @@ cd pi && PYTHONUTF8=1 python -m pytest -q        # ~200 test, ~25 s
 Test không cần phần cứng; nếu thiếu cả pyzbar lẫn bộ giải mã QR của OpenCV thì các test end-to-end tự skip.
 `tools/esp_bench.py --fake` tự kiểm tra kịch bản bench với FakeEsp32.
 
+## Demo trực tiếp trên Pi: camera → LED + còi + một servo
+
+Đây là bài test độc lập trước khi ghép ESP32, nút bấm và HC-SR04. Detector phải thấy đúng một hộp
+trong 3 frame liên tiếp; một hộp chỉ kích hoạt đúng một lần và phải rời khỏi camera trước khi hệ thống
+nhận hộp tiếp theo. Mặc định dùng số chân **BCM**: LED GPIO17 (chân 11), buzzer chủ động GPIO27
+(chân 13, qua transistor), servo GPIO18 (chân 12).
+
+```bash
+cd ~/smart-sorter
+python pi/tools/pi_gpio_demo.py --self-test
+python pi/tools/pi_gpio_demo.py --dry-run --preview
+python pi/tools/pi_gpio_demo.py --preview --max-events 1
+```
+
+Lệnh `--self-test` chỉ thử phần đấu dây, không mở camera/model. Lệnh `--dry-run` kiểm tra camera/model
+nhưng chỉ log output; lệnh cuối mới điều khiển GPIO thật và tự thoát sau một lần nhận hộp. Bỏ
+`--max-events 1` để chạy liên tục. Nếu servo rung, cài/chạy `pigpiod` rồi thêm `--pigpio`. Servo dùng
+nguồn 5 V riêng đủ dòng, còi qua transistor NPN, LED qua điện trở 220–330 Ω; mọi GND phải nối chung.
+Không cấp servo hoặc còi trực tiếp từ GPIO/Pi 3.3 V.
+
 ## Cài lên Raspberry Pi (Bookworm 64-bit)
 
 ```bash
