@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import glob
 from pathlib import Path
 
 # Đảm bảo UTF-8
@@ -43,6 +44,23 @@ from sorter.protocol_gen import (
     EvtPkgDetectedPayload
 )
 from sorter.uart_link import UartLink
+
+
+def list_available_serial_ports() -> list[str]:
+    """Tìm tất cả cổng serial thực tế đang có trên Pi/Linux."""
+    patterns = [
+        "/dev/serial0",
+        "/dev/ttyUSB*",
+        "/dev/ttyACM*",
+        "/dev/ttyAMA*",
+        "/dev/serial/by-id/*",
+    ]
+    found: list[str] = []
+    for pat in patterns:
+        for p in glob.glob(pat):
+            if p not in found:
+                found.append(p)
+    return found
 
 
 def print_pinout_table():
@@ -71,21 +89,61 @@ def print_pinout_table():
 
 def main():
     parser = argparse.ArgumentParser(description="Test toàn bộ phần cứng đấu vào ESP32 qua lệnh UART từ Pi")
-    parser.add_argument("--port", default="/dev/serial0", help="Cổng UART nối với ESP32 (mặc định: /dev/serial0)")
+    parser.add_argument("--port", default=None, help="Cổng UART nối với ESP32 (mặc định: tự phát hiện /dev/serial0 hoặc /dev/ttyUSB0)")
     parser.add_argument("--baud", type=int, default=115200, help="Tốc độ Baud (mặc định: 115200)")
     args = parser.parse_args()
 
     print_pinout_table()
 
-    print(f"[*] Đang mở cổng UART: {args.port} (Baud: {args.baud})...")
-    uart_cfg = UartCfg(port=args.port, baud=args.baud, ack_timeout_ms=300, retries=2, ping_interval_ms=500)
+    available_ports = list_available_serial_ports()
+
+    target_port = args.port
+    if not target_port:
+        if Path("/dev/serial0").exists():
+            target_port = "/dev/serial0"
+        elif any("ttyUSB" in p for p in available_ports):
+            target_port = [p for p in available_ports if "ttyUSB" in p][0]
+            print(f"[*] Phát hiện ESP32 cắm qua cáp USB: {target_port}")
+        elif any("ttyACM" in p for p in available_ports):
+            target_port = [p for p in available_ports if "ttyACM" in p][0]
+            print(f"[*] Phát hiện ESP32 cắm qua cáp USB ACM: {target_port}")
+        elif Path("/dev/ttyAMA0").exists():
+            target_port = "/dev/ttyAMA0"
+        else:
+            target_port = "/dev/serial0"
+
+    print(f"[*] Đang chuẩn bị mở cổng UART: {target_port} (Baud: {args.baud})...")
+    if available_ports:
+        print(f"    [Thông tin] Các cổng serial đang có trên máy: {', '.join(available_ports)}")
+    else:
+        print("    [Cảnh báo] Hiện chưa tìm thấy bất kỳ cổng serial/UART nào trên máy!")
+
+    uart_cfg = UartCfg(port=target_port, baud=args.baud, ack_timeout_ms=300, retries=2, ping_interval_ms=500)
     
     try:
         link = UartLink(uart_cfg)
         link.start()
     except Exception as e:
-        print(f"[-] LỖI: Không thể mở cổng UART {args.port}: {e}")
-        print("    Mẹo trên Pi: Hãy chắc chắn đã bật Serial Port trong 'sudo raspi-config' và tắt Serial Console.")
+        print(f"\n[-] LỖI: Không thể mở cổng UART '{target_port}': {e}")
+        if target_port in ("/dev/serial0", "/dev/ttyAMA0") and not Path(target_port).exists():
+            print("\n" + "=" * 70)
+            print(" HƯỚNG DẪN BẬT UART TRÊN RASPBERRY PI (CHỈ CẦN LÀM 1 LẦN):")
+            print("=" * 70)
+            print("Trên Raspberry Pi, cổng UART /dev/serial0 mặc định bị tắt. Bạn cần bật nó lên:")
+            print("\nCách 1: Chạy nhanh các lệnh sau trên Pi rồi khởi động lại:")
+            print("  CFG=\"/boot/firmware/config.txt\"")
+            print("  [ ! -f \"$CFG\" ] && CFG=\"/boot/config.txt\"")
+            print("  echo 'enable_uart=1' | sudo tee -a \"$CFG\"")
+            print("  echo 'dtoverlay=disable-bt' | sudo tee -a \"$CFG\"")
+            print("  sudo systemctl stop serial-getty@ttyAMA0.service 2>/dev/null")
+            print("  sudo systemctl disable serial-getty@ttyAMA0.service 2>/dev/null")
+            print("  sudo reboot")
+            print("\nCách 2: Dùng lệnh 'sudo raspi-config':")
+            print("  1. Chọn 'Interface Options' -> 'Serial Port'")
+            print("  2. 'login shell over serial?' -> Chọn NO")
+            print("  3. 'serial port hardware enabled?' -> Chọn YES")
+            print("  4. Chọn Finish và Reboot Pi.")
+            print("=" * 70)
         sys.exit(1)
 
     print("[*] Đang gửi lệnh PING để kiểm tra kết nối với ESP32...")

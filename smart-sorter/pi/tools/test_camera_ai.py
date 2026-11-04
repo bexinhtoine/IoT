@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Công cụ kiểm thử Camera máy tính cho Smart Logistics Sorter.
 
-Mở webcam máy tính, chạy đồng thời:
-  1. Box Detector (YOLO-World ONNX) -> Tìm thùng/hộp hàng (cardboard box)
-  2. Packaging Classifier (MobileNetV4 ONNX) -> Phân loại bao bì (OK / Lỗi rách, móp, hỏng)
-  3. QR Scanner (pyzbar / OpenCV) -> Đọc và giải mã MÃ QR (mã vận đơn, kho A/B)
+Hỗ trợ 2 chế độ:
+  1. Chế độ Chốt kiện (Package Trigger Gate): Giả lập cảm biến siêu âm bằng thị giác.
+     Khi đưa hộp vào -> Chốt phân loại & QR đúng 1 lần -> Khóa kết quả -> Chờ lấy hộp ra mới đón hộp mới.
+  2. Chế độ Quét liên tục (Continuous Mode): Phân loại từng khung hình thời gian thực.
 
 Cách dùng:
-  python test_camera.py                         # Dùng webcam mặc định (cam 0)
-  python test_camera.py --cam 1                 # Dùng webcam phụ nếu có
-  python test_camera.py --source path/to/image.jpg
+  python test_camera.py                         # Mở camera với chế độ Chốt từng kiện (Khuyên dùng)
+  python test_camera.py --continuous            # Mở camera ở chế độ quét liên tục
+  python test_camera.py --cam 1                 # Chọn camera phụ
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from sorter.config import AiCfg, DetectionCfg
 from sorter.box_detector import BoxDetector, Box
 from sorter.classifier_onnx import OnnxClassifier
 from sorter.interfaces import LABEL_DEFECT, LABEL_OK, LABEL_UNCERTAIN, ClassResult
-from sorter.qr_reader import read_qr, QR_VALID, QR_NO_QR, QR_MULTI_QR
+from sorter.pi_demo_actuators import BoxTriggerGate
 
 try:
     from pyzbar import pyzbar as _pyzbar
@@ -66,6 +66,19 @@ class QrVisualItem:
     warehouse: str | None = None
 
 
+@dataclass
+class LatchedPackage:
+    pkg_seq: int
+    pkg_id: str | None
+    warehouse: str | None
+    qr_text: str | None
+    label: str
+    confidence: float
+    probs: dict[str, float]
+    timestamp: str
+    box_xyxy: tuple[int, int, int, int]
+
+
 def resolve_model_path(relative_or_abs: str | Path) -> Path:
     p = Path(relative_or_abs)
     if p.is_file():
@@ -80,7 +93,7 @@ def resolve_model_path(relative_or_abs: str | Path) -> Path:
 
 
 def parse_qr_payload(text: str) -> tuple[str | None, str | None]:
-    """Phân tích nội dung mã QR theo chuẩn Sorter: PKGxxxxxx|Kho|Timestamp|Sig."""
+    """Phân tích nội dung mã QR: PKGxxxxxx|Kho|Timestamp|Sig."""
     parts = text.strip().split("|")
     pkg_id = None
     warehouse = None
@@ -93,7 +106,7 @@ def parse_qr_payload(text: str) -> tuple[str | None, str | None]:
 
 
 def scan_qr_with_geometry(frame_bgr: np.ndarray) -> list[QrVisualItem]:
-    """Tìm mã QR và lấy tọa độ hình học (polygon/rect) để vẽ lên camera."""
+    """Tìm mã QR và lấy tọa độ hình học (polygon/rect)."""
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
     results: list[QrVisualItem] = []
 
@@ -141,9 +154,8 @@ def scan_qr_with_geometry(frame_bgr: np.ndarray) -> list[QrVisualItem]:
 
 
 def draw_header_badge(img: np.ndarray, text: str, bg_color: tuple[int, int, int], x: int, y: int) -> int:
-    """Vẽ huy hiệu trạng thái với nền màu bo tròn nhẹ."""
     font = cv2.FONT_HERSHEY_DUPLEX
-    scale = 0.55
+    scale = 0.52
     thick = 1
     (tw, th), baseline = cv2.getTextSize(text, font, scale, thick)
     pad = 6
@@ -153,7 +165,6 @@ def draw_header_badge(img: np.ndarray, text: str, bg_color: tuple[int, int, int]
 
 
 def draw_styled_box(img: np.ndarray, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int], label: str):
-    """Vẽ bounding box với góc nổi bật và nhãn trên đầu."""
     cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
     corner_len = min(20, max(5, (x2 - x1) // 5), max(5, (y2 - y1) // 5))
     thick = 3
@@ -174,8 +185,7 @@ def draw_styled_box(img: np.ndarray, x1: int, y1: int, x2: int, y2: int, color: 
 
 
 def draw_qr_highlight(img: np.ndarray, item: QrVisualItem):
-    """Vẽ viền khung nổi bật quanh mã QR phát hiện được."""
-    color = (255, 140, 0)  # Màu xanh lam đậm / Cyan
+    color = (255, 140, 0)
     if item.polygon and len(item.polygon) >= 3:
         pts = np.array(item.polygon, dtype=np.int32).reshape((-1, 1, 2))
         cv2.polylines(img, [pts], isClosed=True, color=color, thickness=2, lineType=cv2.LINE_AA)
@@ -185,7 +195,6 @@ def draw_qr_highlight(img: np.ndarray, item: QrVisualItem):
         cv2.rectangle(img, (bx, by), (bx + bw, by + bh), color, 2, cv2.LINE_AA)
         x, y = bx, by
 
-    # Nhãn hiển thị ngay trên mã QR
     if item.pkg_id and item.warehouse:
         tag = f"QR [{item.pkg_id} -> {item.warehouse}]"
     else:
@@ -212,6 +221,8 @@ def main():
     parser.add_argument("--min-conf", type=float, default=0.60, help="Ngưỡng tin cậy tối thiểu phân loại (mặc định: 0.60)")
     parser.add_argument("--width", type=int, default=1280, help="Độ rộng khung hình camera")
     parser.add_argument("--height", type=int, default=720, help="Độ cao khung hình camera")
+    parser.add_argument("--continuous", action="store_true",
+                        help="Chạy quét liên tục mọi khung hình (không chốt kiện)")
     parser.add_argument("--always-classify", action="store_true",
                         help="Luôn phân loại vùng giữa màn hình ngay cả khi chưa phát hiện hộp 3D")
     args = parser.parse_args()
@@ -245,7 +256,14 @@ def main():
     print(f"[+] OnnxClassifier đã sẵn sàng (Classes: {classifier.spec.classes})")
     print("[+] QR Scanner đã sẵn sàng (pyzbar + OpenCV)")
 
-    # 2. Mở Camera hoặc Video
+    # 2. Khởi tạo Cổng chốt kiện (BoxTriggerGate) thay thế cảm biến siêu âm
+    trigger_mode = not args.continuous
+    gate = BoxTriggerGate(stable_frames=3, clear_frames=5, cooldown_s=1.5)
+    package_counter = 0
+    latched_package: LatchedPackage | None = None
+    trigger_flash_until = 0.0
+
+    # 3. Mở Camera hoặc Video
     is_image = False
     if args.source:
         source_p = Path(args.source)
@@ -257,7 +275,6 @@ def main():
         else:
             cap = cv2.VideoCapture(str(source_p))
     else:
-        # Mở webcam trên Windows với DirectShow
         cap = cv2.VideoCapture(args.cam, cv2.CAP_DSHOW)
         if not cap.isOpened():
             cap = cv2.VideoCapture(args.cam)
@@ -270,10 +287,11 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("\n--- PHÍM TẮT ĐIỀU KHIỂN ---")
-    print("  [Q] hoặc [ESC] : Thoát chương trình")
+    print("  [M]            : Chuyển đổi giữa chế độ 'Chốt từng kiện' và 'Quét liên tục'")
     print("  [S]            : Chụp và lưu ảnh kết quả vào thư mục runs/camera_tests/")
     print("  [C]            : Bật/Tắt chế độ phân loại vùng giữa khi chưa thấy hộp 3D")
     print("  [SPACE]        : Tạm dừng / Tiếp tục video")
+    print("  [Q] hoặc [ESC] : Thoát chương trình")
     print("-" * 75)
 
     fps_list = []
@@ -282,7 +300,7 @@ def main():
     last_frame = None
     save_msg_until = 0.0
 
-    window_name = "Smart Sorter - Live Camera AI Test (Box & QR)"
+    window_name = "Smart Sorter - Live Camera AI Test"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window_name, 1024, 620)
 
@@ -308,6 +326,7 @@ def main():
 
             h, w = frame.shape[:2]
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            now_ts = time.time()
 
             t0 = time.perf_counter()
 
@@ -316,32 +335,81 @@ def main():
             boxes: list[Box] = detector.detect(rgb)
             det_ms = (time.perf_counter() - t_det_start) * 1000.0
 
-            # B. PHÂN LOẠI BAO BÌ (Classification)
+            # B. CƠ CHẾ CHỐT KIỆN (Thay thế cảm biến siêu âm)
+            just_triggered = False
+            if trigger_mode:
+                just_triggered = gate.update(len(boxes), now=now_ts)
+                if just_triggered:
+                    trigger_flash_until = now_ts + 1.2
+                    package_counter += 1
+
+            # C. PHÂN LOẠI & QUÉT QR
             target_region = None
-            box_used = None
             cls_result: ClassResult | None = None
             cls_ms = 0.0
+            qr_items: list[QrVisualItem] = []
+            qr_ms = 0.0
 
-            if len(boxes) == 1:
-                b = boxes[0]
-                x1, y1, x2, y2 = b.xyxy
-                target_region = rgb[y1:y2, x1:x2]
-                box_used = b
-            elif len(boxes) == 0 and always_classify:
-                rw, rh = int(w * 0.5), int(h * 0.5)
-                rx1, ry1 = (w - rw) // 2, (h - rh) // 2
-                target_region = rgb[ry1:ry1 + rh, rx1:rx1 + rw]
-                box_used = Box(xyxy=(rx1, ry1, rx1 + rw, ry1 + rh), confidence=1.0)
+            if trigger_mode:
+                # Trong chế độ chốt kiện:
+                if just_triggered and len(boxes) == 1:
+                    # KHI VỪA TRIGGER: Thực hiện chụp & phân loại duy nhất 1 lần
+                    b = boxes[0]
+                    x1, y1, x2, y2 = b.xyxy
+                    target_region = rgb[y1:y2, x1:x2]
 
-            if target_region is not None and target_region.size > 0:
-                t_cls_start = time.perf_counter()
-                cls_result = classifier.predict(target_region)
-                cls_ms = (time.perf_counter() - t_cls_start) * 1000.0
+                    t_cls_start = time.perf_counter()
+                    cls_result = classifier.predict(target_region)
+                    cls_ms = (time.perf_counter() - t_cls_start) * 1000.0
 
-            # C. ĐỌC MÃ QR (QR Code Scanning)
-            t_qr_start = time.perf_counter()
-            qr_items = scan_qr_with_geometry(frame)
-            qr_ms = (time.perf_counter() - t_qr_start) * 1000.0
+                    t_qr_start = time.perf_counter()
+                    qr_items = scan_qr_with_geometry(frame)
+                    qr_ms = (time.perf_counter() - t_qr_start) * 1000.0
+
+                    first_qr = qr_items[0] if qr_items else None
+                    latched_package = LatchedPackage(
+                        pkg_seq=package_counter,
+                        pkg_id=first_qr.pkg_id if first_qr else None,
+                        warehouse=first_qr.warehouse if first_qr else None,
+                        qr_text=first_qr.text if first_qr else None,
+                        label=cls_result.label,
+                        confidence=cls_result.confidence,
+                        probs=cls_result.probs,
+                        timestamp=datetime.datetime.now().strftime("%H:%M:%S"),
+                        box_xyxy=b.xyxy
+                    )
+                    # Tiếng bíp thông báo chốt kiện (trên Windows)
+                    if sys.platform == "win32":
+                        try:
+                            import winsound
+                            winsound.Beep(1200, 100)
+                        except Exception:
+                            pass
+                elif not gate.armed:
+                    # Hộp vẫn còn trong khung hình -> giữ nguyên kết quả latched_package
+                    pass
+                else:
+                    # Đã lấy hộp ra -> reset để sẵn sàng đón hộp mới
+                    latched_package = None
+            else:
+                # Chế độ quét liên tục mọi frame
+                if len(boxes) == 1:
+                    b = boxes[0]
+                    x1, y1, x2, y2 = b.xyxy
+                    target_region = rgb[y1:y2, x1:x2]
+                elif len(boxes) == 0 and always_classify:
+                    rw, rh = int(w * 0.5), int(h * 0.5)
+                    rx1, ry1 = (w - rw) // 2, (h - rh) // 2
+                    target_region = rgb[ry1:ry1 + rh, rx1:rx1 + rw]
+
+                if target_region is not None and target_region.size > 0:
+                    t_cls_start = time.perf_counter()
+                    cls_result = classifier.predict(target_region)
+                    cls_ms = (time.perf_counter() - t_cls_start) * 1000.0
+
+                t_qr_start = time.perf_counter()
+                qr_items = scan_qr_with_geometry(frame)
+                qr_ms = (time.perf_counter() - t_qr_start) * 1000.0
 
             # Tính FPS
             total_cycle = (time.perf_counter() - t0)
@@ -354,7 +422,7 @@ def main():
             # D. VẼ GIAO DIỆN (UI OVERLAY)
             display = frame.copy()
 
-            # 1. Vẽ mã QR phát hiện được
+            # 1. Vẽ mã QR
             for q_item in qr_items:
                 draw_qr_highlight(display, q_item)
 
@@ -363,18 +431,14 @@ def main():
                 for idx, b in enumerate(boxes):
                     bx1, by1, bx2, by2 = b.xyxy
                     if len(boxes) == 1:
-                        color = (0, 220, 0)
+                        # Nếu trong trigger mode đã chốt thì viền xanh đậm
+                        color = (0, 220, 0) if (trigger_mode and not gate.armed) else (0, 200, 100)
                         lbl = f"Box: {b.confidence*100:.0f}%"
                         draw_styled_box(display, bx1, by1, bx2, by2, color, lbl)
                     else:
                         color = (0, 165, 255)
                         lbl = f"Box #{idx+1} ({b.confidence*100:.0f}%)"
                         draw_styled_box(display, bx1, by1, bx2, by2, color, lbl)
-            elif always_classify and box_used is not None:
-                rx1, ry1, rx2, ry2 = box_used.xyxy
-                cv2.rectangle(display, (rx1, ry1), (rx2, ry2), (255, 200, 0), 1, cv2.LINE_AA)
-                cv2.putText(display, "CENTER REGION (Auto Cls)", (rx1 + 5, ry1 - 5),
-                            cv2.FONT_HERSHEY_PLAIN, 1.0, (255, 200, 0), 1)
 
             # 3. Header Dashboard (Top bar)
             header_h = 75
@@ -384,79 +448,91 @@ def main():
 
             cur_x = 15
             cur_y = 30
-            cur_x = draw_header_badge(display, "SMART SORTER", (120, 50, 0), cur_x, cur_y)
+            # Badge Chế độ
+            mode_tag = "CHOT KIEN (VIRTUAL SENSOR)" if trigger_mode else "QUET LIEN TUC"
+            mode_col = (140, 50, 0) if trigger_mode else (80, 80, 80)
+            cur_x = draw_header_badge(display, mode_tag, mode_col, cur_x, cur_y)
 
-            # Badge Mã QR
-            if qr_items:
-                first_qr = qr_items[0]
-                if first_qr.pkg_id and first_qr.warehouse:
-                    cur_x = draw_header_badge(display, f"QR: {first_qr.pkg_id} -> {first_qr.warehouse}", (180, 90, 0), cur_x, cur_y)
+            # Badge Trạng thái Cổng / Trigger
+            if trigger_mode:
+                if gate.armed:
+                    cur_x = draw_header_badge(display, "SAN SANG (CHO HOP VAO)", (30, 140, 30), cur_x, cur_y)
                 else:
-                    cur_x = draw_header_badge(display, f"QR: {first_qr.text[:22]}", (180, 90, 0), cur_x, cur_y)
+                    cur_x = draw_header_badge(display, "DA CHOT! (VUI LONG LAY HOP RA)", (0, 120, 220), cur_x, cur_y)
             else:
-                cur_x = draw_header_badge(display, "QR: DANG TIM MA QR...", (60, 60, 60), cur_x, cur_y)
-
-            # Badge Trạng thái Hộp
-            if len(boxes) == 1:
-                cur_x = draw_header_badge(display, "1 HOP DETECTED", (30, 150, 30), cur_x, cur_y)
-            elif len(boxes) > 1:
-                cur_x = draw_header_badge(display, f"{len(boxes)} HOP", (0, 120, 220), cur_x, cur_y)
-            else:
-                cur_x = draw_header_badge(display, "DANG TIM HOP...", (70, 70, 70), cur_x, cur_y)
+                if len(boxes) == 1:
+                    cur_x = draw_header_badge(display, "1 HOP DETECTED", (30, 150, 30), cur_x, cur_y)
+                elif len(boxes) > 1:
+                    cur_x = draw_header_badge(display, f"{len(boxes)} HOP (LOAI)", (0, 100, 220), cur_x, cur_y)
+                else:
+                    cur_x = draw_header_badge(display, "DANG TIM HOP...", (60, 60, 60), cur_x, cur_y)
 
             # Badge Phân loại Bao bì
-            if cls_result is not None:
-                if cls_result.label == LABEL_OK:
-                    cur_x = draw_header_badge(display, f"BAO BI: OK ({cls_result.confidence*100:.0f}%)", (30, 160, 30), cur_x, cur_y)
-                elif cls_result.label == LABEL_DEFECT:
-                    cur_x = draw_header_badge(display, f"BAO BI: LOI RÁCH/HỎNG ({cls_result.confidence*100:.0f}%)", (30, 30, 200), cur_x, cur_y)
+            disp_label = latched_package.label if (trigger_mode and latched_package) else (cls_result.label if cls_result else None)
+            disp_conf = latched_package.confidence if (trigger_mode and latched_package) else (cls_result.confidence if cls_result else 0.0)
+
+            if disp_label:
+                if disp_label == LABEL_OK:
+                    cur_x = draw_header_badge(display, f"BAO BI: NGUYEN VEN ({disp_conf*100:.0f}%)", (30, 160, 30), cur_x, cur_y)
+                elif disp_label == LABEL_DEFECT:
+                    cur_x = draw_header_badge(display, f"BAO BI: BI HU/LOI ({disp_conf*100:.0f}%)", (30, 30, 200), cur_x, cur_y)
                 else:
-                    cur_x = draw_header_badge(display, f"BAO BI: CHUA RO ({cls_result.confidence*100:.0f}%)", (0, 140, 220), cur_x, cur_y)
+                    cur_x = draw_header_badge(display, f"BAO BI: CHUA RO ({disp_conf*100:.0f}%)", (0, 140, 220), cur_x, cur_y)
             else:
                 cur_x = draw_header_badge(display, "BAO BI: CHO HOP", (60, 60, 60), cur_x, cur_y)
 
             # Dòng phụ trong Header (FPS & Latency)
-            info_str = f"FPS: {avg_fps:4.1f} | Box: {det_ms:3.0f}ms | Cls: {cls_ms:3.0f}ms | QR: {qr_ms:3.0f}ms | Cam: {w}x{h}"
+            info_str = f"FPS: {avg_fps:4.1f} | Box: {det_ms:3.0f}ms | Cls: {cls_ms:3.0f}ms | Cam: {w}x{h} | Kiện đã phân loại: {package_counter}"
             cv2.putText(display, info_str, (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
 
-            # 4. Footer Bar: Thông tin mã QR & Phân loại & Hướng dẫn
-            footer_h = 80
+            # 4. Footer Bar: Kết quả kiện hàng
+            footer_h = 85
             overlay_f = display.copy()
             cv2.rectangle(overlay_f, (0, h - footer_h), (w, h), (20, 20, 20), -1)
-            cv2.addWeighted(overlay_f, 0.82, display, 0.18, 0, display)
+            cv2.addWeighted(overlay_f, 0.85, display, 0.15, 0, display)
 
-            # Dòng 1: Thông tin mã QR
-            if qr_items:
-                first_qr = qr_items[0]
-                if first_qr.pkg_id and first_qr.warehouse:
-                    qr_str = f"MA QR: [{first_qr.pkg_id}] -> DICH DEN: {first_qr.warehouse}  |  Payload: {first_qr.text[:45]}"
+            if trigger_mode and latched_package:
+                lp = latched_package
+                # Kiện đã chốt
+                qr_desc = f"[{lp.pkg_id} -> {lp.warehouse}]" if (lp.pkg_id and lp.warehouse) else (f"[{lp.qr_text[:30]}]" if lp.qr_text else "Khong co QR")
+                p_norm = lp.probs.get("normal", lp.probs.get(LABEL_OK, 0.0)) * 100
+                p_dam = lp.probs.get("damage", lp.probs.get(LABEL_DEFECT, 0.0)) * 100
+                res_desc = f"Lanh lan ({p_norm:.1f}%)" if lp.label == LABEL_OK else f"Loi/Hong ({p_dam:.1f}%)"
+
+                line1 = f"KIEN #{lp.pkg_seq} ({lp.timestamp})  |  QR: {qr_desc}  |  Bao bi: {res_desc}"
+                cv2.putText(display, line1, (15, h - footer_h + 30), cv2.FONT_HERSHEY_DUPLEX, 0.55, (0, 255, 120), 1, cv2.LINE_AA)
+
+                line2 = f"-> Da chot ket qua! Hay lay hop ra khoi camera de he thong san sang don hop tiep theo."
+                cv2.putText(display, line2, (15, h - footer_h + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 200, 255), 1, cv2.LINE_AA)
+            elif trigger_mode and not latched_package:
+                cv2.putText(display, "CHOT KIEN: Dat hop carton on dinh vao camera, he thong se chot phan loai 1 lan duy nhat.",
+                            (15, h - footer_h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA)
+                cv2.putText(display, "Bam [M] de doi sang che do Quet lien tuc  |  [S] Chup luu  |  [Q] Thoat",
+                            (15, h - footer_h + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE_AA)
+            else:
+                # Continuous mode
+                if cls_result:
+                    p_norm = cls_result.probs.get("normal", cls_result.probs.get(LABEL_OK, 0.0)) * 100
+                    p_dam = cls_result.probs.get("damage", cls_result.probs.get(LABEL_DEFECT, 0.0)) * 100
+                    cv2.putText(display, f"QUET LIEN TUC -> Normal: {p_norm:.1f}%  |  Damage: {p_dam:.1f}%",
+                                (15, h - footer_h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
                 else:
-                    qr_str = f"MA QR: {first_qr.text}"
-                cv2.putText(display, qr_str, (15, h - footer_h + 30), cv2.FONT_HERSHEY_DUPLEX, 0.52, (0, 255, 120), 1, cv2.LINE_AA)
-            else:
-                cv2.putText(display, "MA QR: Huong ma QR tren hop ve phia camera de quet thong tin phan loai",
-                            (15, h - footer_h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
+                    cv2.putText(display, "QUET LIEN TUC: Cho hop vao camera", (15, h - footer_h + 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
+                cv2.putText(display, "Bam [M] de bat che do Chot tung kien (Tranh nhay ket qua) | [Q] Thoat",
+                            (15, h - footer_h + 62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE_AA)
 
-            # Dòng 2: Xác suất chi tiết AI Bao bì
-            if cls_result is not None:
-                p_norm = cls_result.probs.get("normal", cls_result.probs.get(LABEL_OK, 0.0)) * 100
-                p_dam = cls_result.probs.get("damage", cls_result.probs.get(LABEL_DEFECT, 0.0)) * 100
-                cls_detail = f"AI Bao bi -> Lanh lan (Normal): {p_norm:.1f}%  |  Rach/Hong (Damage): {p_dam:.1f}%"
-                cv2.putText(display, cls_detail, (15, h - footer_h + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
-            else:
-                guide_cls = "Meo: Dat hop vao giua camera hoac bam phim [C] de bat phan loai tam"
-                cv2.putText(display, guide_cls, (15, h - footer_h + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (160, 160, 160), 1, cv2.LINE_AA)
-
-            # Phím tắt điều khiển ở góc phải
-            keys_info = "[S] Chup | [C] Che do tam | [Space] Pause | [Q/ESC] Thoat"
-            (kw, _), _ = cv2.getTextSize(keys_info, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-            cv2.putText(display, keys_info, (w - kw - 15, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
+            # Flash thông báo khi vừa chốt
+            if now_ts < trigger_flash_until:
+                cv2.rectangle(display, (w // 2 - 220, h // 2 - 35), (w // 2 + 220, h // 2 + 35), (0, 180, 0), -1)
+                cv2.putText(display, "DA CHOT KIEN HANG MOI!", (w // 2 - 190, h // 2 + 10),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.8, (255, 255, 255), 2)
 
             # Thông báo đã lưu ảnh
             if time.time() < save_msg_until:
-                cv2.rectangle(display, (w // 2 - 200, h // 2 - 25), (w // 2 + 200, h // 2 + 25), (0, 180, 0), -1)
-                cv2.putText(display, "DA LUU ANH VA KET QUA!", (w // 2 - 160, h // 2 + 8),
-                            cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 2)
+                cv2.rectangle(display, (w // 2 - 180, h // 2 - 25), (w // 2 + 180, h // 2 + 25), (30, 140, 30), -1)
+                cv2.putText(display, "DA LUU ANH VA KET QUA!", (w // 2 - 150, h // 2 + 8),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.65, (255, 255, 255), 2)
 
             cv2.imshow(window_name, display)
 
@@ -465,6 +541,10 @@ def main():
             if key in (ord("q"), ord("Q"), 27):
                 print("[*] Đang thoát...")
                 break
+            elif key in (ord("m"), ord("M")):
+                trigger_mode = not trigger_mode
+                latched_package = None
+                print(f"[*] Đã chuyển sang: {'Chế độ Chốt từng kiện (Trigger)' if trigger_mode else 'Chế độ Quét liên tục (Continuous)'}")
             elif key in (ord("s"), ord("S")):
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 img_file = output_dir / f"test_{ts}.jpg"
@@ -472,17 +552,16 @@ def main():
                 cv2.imwrite(str(img_file), frame)
                 result_data = {
                     "timestamp": ts,
-                    "qr_codes": [
-                        {"text": q.text, "pkg_id": q.pkg_id, "warehouse": q.warehouse, "rect": q.rect}
-                        for q in qr_items
-                    ],
+                    "mode": "trigger" if trigger_mode else "continuous",
+                    "latched_package": {
+                        "pkg_seq": latched_package.pkg_seq,
+                        "pkg_id": latched_package.pkg_id,
+                        "warehouse": latched_package.warehouse,
+                        "label": latched_package.label,
+                        "confidence": latched_package.confidence,
+                        "probs": latched_package.probs,
+                    } if latched_package else None,
                     "boxes": [{"xyxy": b.xyxy, "confidence": b.confidence} for b in boxes],
-                    "classification": {
-                        "label": cls_result.label if cls_result else None,
-                        "confidence": cls_result.confidence if cls_result else None,
-                        "probs": cls_result.probs if cls_result else None,
-                        "infer_ms": cls_result.infer_ms if cls_result else None,
-                    } if cls_result else None,
                     "fps": round(avg_fps, 2)
                 }
                 json_file.write_text(json.dumps(result_data, indent=2, ensure_ascii=False), encoding="utf-8")
