@@ -26,6 +26,7 @@ dependencies.lock
 dataset/
 *.onnx
 !ai/samples/*.onnx
+!ai/models/*.onnx
 *.tflite
 *.pt
 *.joblib
@@ -40,3 +41,6 @@ defects/
 .vscode/
 .idea/
 *.swp
+ai/.cache/
+ai/.deps/
+ai/*.onnx

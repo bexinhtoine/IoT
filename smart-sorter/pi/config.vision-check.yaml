@@ -1,0 +1,19 @@
+# Thử cả detector + classifier thật trên ảnh toàn cảnh, không điều khiển phần cứng.
+camera:
+  roi: [320, 160, 640, 640]  # chỉnh theo ảnh thật hoặc dùng --full-frame
+ai:
+  backend: onnx
+  model_path: ../ai/models/packaging_cls.onnx
+  labels_path: ../ai/models/labels.json
+  model_card_path: ../ai/models/model_card.json
+  input_size: 256
+  min_confidence: 0.6
+  threads: 4
+  detection:
+    backend: yolo_world_onnx
+    model_path: ../ai/models/box_detector.onnx
+    confidence: 0.35
+    iou_threshold: 0.5
+    input_size: 640
+    padding: 0.1
+    min_area_ratio: 0.01

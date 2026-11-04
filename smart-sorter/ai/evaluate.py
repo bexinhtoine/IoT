@@ -36,7 +36,7 @@ from sorter.interfaces import LABEL_DEFECT, LABEL_OK  # noqa: E402
 
 log = logging.getLogger("evaluate")
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-OK_NAMES = {"ok", "good", "intact", "lanh", "tot"}
+OK_NAMES = {"ok", "good", "intact", "normal", "clean", "lanh", "tot"}
 
 
 @dataclass

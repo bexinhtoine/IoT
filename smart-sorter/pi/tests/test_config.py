@@ -59,3 +59,19 @@ def test_missing_key_file(tmp_path):
 def test_missing_config_file(tmp_path):
     with pytest.raises(ConfigError):
         load_config(tmp_path / "missing.yaml")
+
+
+@pytest.mark.parametrize("setting", [
+    {"backend": "unknown"}, {"confidence": 0}, {"iou_threshold": 1.1},
+    {"padding": -0.1}, {"min_area_ratio": 0}, {"input_size": 257},
+    {"confidence": float("nan")},
+])
+def test_bad_detector_config(tmp_path, setting):
+    with pytest.raises(ConfigError, match="ai.detection"):
+        load_config(write_cfg(tmp_path, {"ai": {"detection": setting}}))
+
+
+def test_detector_model_path_resolved_relative_to_yaml(tmp_path):
+    cfg = load_config(write_cfg(tmp_path, {"ai": {"detection": {"model_path": "box.onnx"}}}),
+                      validate_files=False)
+    assert cfg.ai.detection.model_path == str((tmp_path / "box.onnx").resolve())

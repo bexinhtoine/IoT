@@ -140,11 +140,11 @@ def build_cfg(args: argparse.Namespace) -> AiCfg:
 
 
 def make_classifier(cfg: AiCfg) -> Classifier:
-    if cfg.backend == "tflite":
-        return TfliteClassifier(cfg)
-    if cfg.backend == "onnx":
-        return OnnxClassifier(cfg)
-    raise SystemExit(f"ai.backend={cfg.backend}: benchmark chỉ hỗ trợ onnx | tflite (dummy không có model)")
+    if cfg.backend not in ("onnx", "tflite"):
+        raise SystemExit(f"ai.backend={cfg.backend}: benchmark chỉ hỗ trợ onnx | tflite")
+    from sorter.config import SorterConfig
+    from sorter.factories import make_classifier as build_classifier
+    return build_classifier(SorterConfig(ai=cfg))
 
 
 def run_benchmark(cfg: AiCfg, image_path: str, runs: int, warmup: int,

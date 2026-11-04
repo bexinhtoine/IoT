@@ -1,0 +1,7 @@
+# Cài trên máy export; KHÔNG cần trên Pi.
+-r requirements.txt
+ultralytics==8.3.211
+git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40
+ftfy
+regex
+tqdm

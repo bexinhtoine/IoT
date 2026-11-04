@@ -48,6 +48,17 @@ class QrCfg:
 
 
 @dataclass
+class DetectionCfg:
+    backend: str = "none"  # none (ROI cố định) | yolo_world_onnx
+    model_path: str = ""
+    confidence: float = 0.35
+    iou_threshold: float = 0.5
+    input_size: int = 640
+    padding: float = 0.1
+    min_area_ratio: float = 0.01
+
+
+@dataclass
 class AiCfg:
     backend: str = "dummy"               # dummy | onnx | tflite
     model_path: str = "/opt/sorter/models/packaging_cls.onnx"
@@ -56,6 +67,7 @@ class AiCfg:
     input_size: int = 224
     min_confidence: float = 0.6
     threads: int = 4
+    detection: DetectionCfg = field(default_factory=DetectionCfg)
 
 
 @dataclass
@@ -207,6 +219,21 @@ def validate(cfg: SorterConfig) -> None:
         errs.append("ai.min_confidence phải trong 0..1")
     if cfg.ai.backend != "dummy" and not Path(cfg.ai.model_path).exists():
         errs.append(f"ai.model_path không tồn tại: {cfg.ai.model_path}")
+    det = cfg.ai.detection
+    if det.backend not in ("none", "yolo_world_onnx"):
+        errs.append("ai.detection.backend phải là none | yolo_world_onnx")
+    if det.backend != "none":
+        if cfg.ai.backend == "dummy":
+            errs.append("ai.detection không được dùng với classifier dummy")
+        if not det.model_path or not Path(det.model_path).is_file():
+            errs.append("ai.detection.model_path không tồn tại")
+    for name in ("confidence", "iou_threshold", "min_area_ratio"):
+        if not 0 < getattr(det, name) <= 1:
+            errs.append(f"ai.detection.{name} phải trong (0,1]")
+    if not 0 <= det.padding <= 0.5:
+        errs.append("ai.detection.padding phải trong [0,0.5]")
+    if det.input_size < 32 or det.input_size % 32:
+        errs.append("ai.detection.input_size phải là bội của 32, >= 32")
     if cfg.uart.baud not in (9600, 19200, 38400, 57600, 115200, 230400):
         errs.append("uart.baud không hợp lệ")
     if not 50 <= cfg.uart.ack_timeout_ms <= 5000:
@@ -270,6 +297,7 @@ def _resolve_paths(cfg: SorterConfig, base: Path) -> None:
     cfg.ai.model_path = fix(cfg.ai.model_path)
     cfg.ai.labels_path = fix(cfg.ai.labels_path)
     cfg.ai.model_card_path = fix(cfg.ai.model_card_path)
+    cfg.ai.detection.model_path = fix(cfg.ai.detection.model_path)
     cfg.camera.folder = fix(cfg.camera.folder)
     cfg.thingsboard.ca_cert = fix(cfg.thingsboard.ca_cert)
     cfg.thingsboard.client_cert = fix(cfg.thingsboard.client_cert)

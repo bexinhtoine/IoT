@@ -29,7 +29,7 @@ from pathlib import Path
 log = logging.getLogger("prepare_dataset")
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-OK_NAMES = {"ok", "good", "intact", "lanh", "tot"}
+OK_NAMES = {"ok", "good", "intact", "normal", "clean", "lanh", "tot"}
 DEFECT_NAMES = {"tear", "dent", "crush", "wet", "defect", "rach", "mop", "bep", "uot", "damaged"}
 # Tên file: <box_id>_<timestamp>.jpg — box_id là phần trước dấu "_" cuối cùng gắn với chuỗi số/thời gian
 NAME_RE = re.compile(r"^(?P<box>.+?)_(?P<ts>\d{8}[_T-]?\d{6}(?:[_.]\d+)?|\d{10,16})(?:_\d+)?$")

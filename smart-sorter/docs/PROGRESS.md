@@ -1,6 +1,6 @@
 # Tiến độ dự án Smart Logistics Sorter
 
-Cập nhật: 2026-10-28. Nguồn đặc tả: [SPEC.md](SPEC.md). Bảng truy vết từng mã chức năng: [traceability.md](traceability.md).
+Cập nhật AI: 2026-11-04. Nguồn đặc tả: [SPEC.md](SPEC.md). Bảng truy vết từng mã chức năng: [traceability.md](traceability.md).
 
 ## 1. Tóm tắt trạng thái
 
@@ -9,7 +9,7 @@ Cập nhật: 2026-10-28. Nguồn đặc tả: [SPEC.md](SPEC.md). Bảng truy v
 | P1 | Khung repo, `protocol.yaml`, `gen.py`, codec UART Python + C, test vectors | ✅ Hoàn thành | 22 test pytest pass; test C viết xong nhưng **chưa biên dịch** (máy dev không có gcc) |
 | P2 | Firmware ESP32: FSM, motor, servo, sensor, LED/còi, E-stop, link UART, params NVS, STATUS, HW_TEST | ✅ Code xong | **Chưa build** (không có ESP-IDF trên máy dev); cần `idf.py build` + chạy `pi/tools/esp_bench.py --port` trên board thật |
 | P3 | sorter-core trên Pi: config, Picamera2, QR, HMAC, decision, UART link, FakeEsp32, SQLite, counters, health, log JSON, orchestrator, CLI, tools, systemd, install script | ✅ Hoàn thành | pytest pass; `--sim` chạy đúng 8 ảnh mẫu; `esp_bench.py --fake` 16/16 PASS |
-| P4 | OnnxClassifier/TfliteClassifier, benchmark, prepare_dataset, train (3 đường), evaluate, model dummy | ✅ Code xong | 13 test pass; chạy sim với backend onnx OK; **model thật chưa train** (cần dataset chụp tại trạm) |
+| P4 | MobileNetV4 3-best, ONNX FP32 xuất sẵn, detector YOLO-World ONNX, benchmark, evaluate | ✅ Code xong | Model đã train; export kiểm tra PyTorch/ONNX parity. 223 test Pi pass; detector đã xuất và thử ảnh thật. Chưa đo trên Pi/camera thật; xem AI_VALIDATION.md |
 | P5 | PKI (CA, cert server/device/OTA), docker-compose TB, tb_client TLS X.509, rpc_handler whitelist, widgets, rpc_cli, SETUP.md | ✅ Code xong | 74 test pass (mock MQTT); script PKI chạy thật; **chưa kết nối ThingsBoard thật** |
 | P6 | harden_pi.sh, security_audit.sh, esp32/SECURITY.md, security_slide.md, threat_model.md | ✅ Hoàn thành | `bash -n` OK; chạy giả lập OK; **cần chạy trên Pi thật** |
 | P7 | App Secure OTA (auth bcrypt+TOTP, khóa ECDSA, manifest, HTTPS server, lịch sử, demo tấn công, verify_cli) | ✅ Hoàn thành | 31 test pass (gồm HTTPS thật với CA tự tạo); UI smoke-test headless |
@@ -23,7 +23,7 @@ Tổng: `pi` **203 test pass**, `ota-app` **31 test pass** (Python 3.12, Windows
 
 - **E-01…E-12** (ESP32): đủ trong `esp32/components/{fsm,motor,servo,sensor,indicator,estop,link,params}`; E-13 → `ota_secure`; E-14 → tài liệu `esp32/SECURITY.md`.
 - **P-01…P-16** (Pi): đủ trong `pi/sorter/` + `pi/tools/` + `pi/systemd/` + `pi/scripts/install_pi.sh`.
-- **AI-01…AI-07**: `pi/tools/capture_dataset.py`, `ai/prepare_dataset.py`, 3 đường train, `ai/evaluate.py` (ngưỡng recall ≥ 95 %), `pi/sorter/classifier_onnx.py`, `pi/tools/benchmark_model.py`.
+- **AI-01…AI-07**: `pi/tools/capture_dataset.py`, `ai/prepare_dataset.py`, `ai/3-best.ipynb` + `ai/export_model.py` + `ai/export_detector.py`, `ai/evaluate.py` (ngưỡng recall ≥ 95 %), `pi/sorter/classifier_onnx.py`, `pi/tools/benchmark_model.py`.
 - **T-01…T-08**: `thingsboard/docker-compose.yml`, `tb_client.py`, `rpc_handler.py`, `widgets/`, hướng dẫn cấu hình trong `thingsboard/SETUP.md` (device profile, alarm, rule chain, user/2FA, dashboard).
 - **S-01…S-09**: PKI + mutual TLS, 2FA (hướng dẫn), HMAC QR + chống trùng, TLS ≥ 1.2 không bao giờ bỏ xác minh, RPC whitelist + audit, UART CRC/SEQ, harden_pi.sh, SECURITY.md ESP32, security_events.
 - **O-01…O-15**: `ota-app/` (O-01…O-07) và `esp32/components/ota_secure/` (O-08…O-15).
@@ -32,7 +32,7 @@ Tổng: `pi` **203 test pass**, `ota-app` **31 test pass** (Python 3.12, Windows
 ## 3. Việc còn lại (cần phần cứng hoặc dữ liệu thật)
 
 1. **Build & nạp firmware ESP32** (`idf.py build`), chạy `SORTER_HW_TEST` để kiểm tra đấu dây, rồi `pi/tools/esp_bench.py --port` 16 ca. Đối chiếu các API ESP-IDF được đánh dấu "đối chiếu docs" trong `esp32/README.md`.
-2. **Chụp dataset thật** (≥ 300 ảnh/lớp) bằng `capture_dataset.py`, train bằng `ai/train_packaging_damage.ipynb` trên Colab, chạy `ai/evaluate.py`, copy model sang Pi, đo `benchmark_model.py` trên Pi 4 → điền `docs/metrics.md`.
+2. **Chụp dataset thật** (≥ 300 ảnh/lớp) bằng `capture_dataset.py`, dùng checkpoint `ai/best_model.pth` đã train hoặc fine-tune `ai/3-best.ipynb`, chạy `ai/evaluate.py`, copy model sang Pi, đo `benchmark_model.py` trên Pi 4 → điền `docs/metrics.md`.
 3. **Dựng ThingsBoard** bằng Docker, tạo cert, cấu hình theo `thingsboard/SETUP.md` (device profile, alarm, rule chain, dashboard, user, 2FA). Chưa có file JSON dashboard import sẵn; dựng tay theo bảng widget rồi export.
 4. **Cài Pi thật**: `install_pi.sh`, bật UART (`dtoverlay=disable-bt`), đặt khóa HMAC và cert quyền 600, `harden_pi.sh`, `security_audit.sh`.
 5. **Secure Boot / Flash Encryption** trên board dự phòng theo `esp32/SECURITY.md` (ghi eFuse vĩnh viễn).

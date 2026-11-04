@@ -26,9 +26,17 @@ ai:
   model_path: /opt/sorter/models/packaging_cls.onnx
   labels_path: /opt/sorter/models/labels.json
   model_card_path: /opt/sorter/models/model_card.json   # nếu có: input_size + defect_threshold lấy từ đây
-  input_size: 224
+  input_size: 256           # 3-best.ipynb: RGB 256, normalization đã nhúng trong ONNX
   min_confidence: 0.6
   threads: 4
+  detection:
+    backend: yolo_world_onnx
+    model_path: /opt/sorter/models/box_detector.onnx
+    confidence: 0.35        # ngưỡng detector, độc lập với min_confidence classifier
+    iou_threshold: 0.5
+    input_size: 640
+    padding: 0.1            # giữ bối cảnh 10% như crop trong notebook
+    min_area_ratio: 0.01
 
 uart:
   port: /dev/serial0

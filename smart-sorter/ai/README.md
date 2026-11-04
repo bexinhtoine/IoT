@@ -1,152 +1,145 @@
-# ai/ — AI kiểm tra bao bì (AI-01 → AI-07, P-05)
+# AI kiểm tra bao bì — model 3-best
 
-Phân loại ảnh hộp tại trạm chụp thành **OK / DEFECT** (tùy chọn loại lỗi tear / dent / crush / wet), chạy trên
-Raspberry Pi 4 bằng ONNX Runtime (hoặc TFLite). Nguyên tắc AI-07: **ngưỡng ưu tiên an toàn** — thà loại nhầm hàng tốt
-còn hơn để lọt hàng hỏng (recall lớp lỗi ≥ 95 %).
+Model triển khai chính thức là **MobileNetV4 từ `3-best.ipynb` của nhóm**. Không cần train lại. Chương trình Pi chỉ đọc các file đã xuất trong `models/`; không export, tải model hoặc import PyTorch khi khởi động.
 
-```
-ai/
-  train_packaging_damage.ipynb   notebook train CHÍNH THỨC của nhóm (ConvNeXt-V2 thầy → chưng cất MobileNetV4 trò, ONNX INT8)
-  train_yolo_cls.py / .ipynb     đường 2: YOLOv8n-cls 224 (Colab, có ô mount Drive)
-  train_mobilenetv2.py           đường 3: MobileNetV2 Keras → TFLite float16/int8
-  prepare_dataset.py             AI-02: lọc ảnh hỏng, thống kê, chia 70/15/15 THEO HỘP, xuất cấu trúc ultralytics
-  evaluate.py                    AI-05/AI-07: metrics, confusion_matrix.png, misclassified_grid.png, chọn ngưỡng, cập nhật model_card
-  export_dummy_model.py          model ONNX giả (không cần torch) để test / sim / benchmark
-  samples/                       dummy_packaging_cls.onnx + model_card.json + labels.json (được commit)
-  requirements.txt               môi trường laptop/Colab (KHÔNG cài trên Pi)
-pi/sorter/classifier_onnx.py     P-05/AI-06: OnnxClassifier + TfliteClassifier (đọc model_card.json)
-pi/tools/benchmark_model.py      AI-05: 100 lần suy luận trên Pi → mean/p50/p95/max ms + RAM
-```
+## File cần dùng
 
-## 1. Chụp dataset đúng cách (AI-01)
-
-Dùng `pi/tools/capture_dataset.py` (module P3) **ngay tại trạm chụp**, với đúng đèn, đúng camera, đúng ROI sẽ dùng khi demo:
-
-| Việc cần làm | Vì sao |
+| File | Vai trò |
 |---|---|
-| Cùng đèn, cùng góc camera, cùng nền (mặt băng tải thật, không trải giấy) | Model học đúng điều kiện demo; ảnh khác đèn sẽ làm sai lệch xác suất |
-| Khóa AE/AWB (P-02) trước khi chụp | Ảnh đồng đều giữa các lần chụp |
-| Mỗi hộp chụp **6–10 ảnh**: xoay 0/90/180/270°, lệch trái/phải, hơi nghiêng, đặt lệch khỏi tâm ROI | Khi chia theo hộp vẫn đủ ảnh; model không học "vị trí" |
-| Nhiều hộp khác nhau (kích thước, màu carton, nhãn dán, băng keo) | Tránh model học đặc điểm một hộp cụ thể |
-| Lớp lỗi: nhiều **mức độ** (rách nhỏ 1 cm → rách lớn, móp nhẹ → bẹp góc, vết ướt nhỏ → loang), lỗi ở nhiều vị trí (cạnh, góc, mặt) | Ngưỡng recall 95 % chỉ có nghĩa khi có cả lỗi khó |
-| Lớp OK: hộp lành nhưng có nhãn, băng keo, vết bẩn nhẹ, in logo, hộp cũ hơi xước | Giảm loại nhầm hàng tốt |
-| Đặt tên theo hộp `dataset/<lớp>/<box_id>_<timestamp>.jpg` (capture_dataset làm sẵn) | Chia train/test theo hộp — ảnh cùng hộp không được ở cả hai tập |
+| `3-best.ipynb` | Notebook train gốc; khóa Roboflow đọc từ `ROBOFLOW_API_KEY` |
+| `best_model.pth` | Checkpoint tốt nhất theo validation average precision, nguồn export chính |
+| `packaging_model_weights.pth` | Trọng số export; đã đối chiếu từng tensor và giống hệt `best_model.pth` |
+| `packaging_model_full.pth` | Bản lưu nguyên module từ notebook; giữ làm bản gốc, runtime không dùng |
+| `packaging_net.py` | Định nghĩa lại đúng kiến trúc notebook, nạp state_dict strict |
+| `export_model.py` | Chỉ chạy khi đổi checkpoint, xuất ONNX và kiểm tra parity |
+| `models/packaging_cls.onnx` | Model phân loại FP32 đã xuất sẵn, dùng trực tiếp trên Pi |
+| `models/labels.json`, `models/model_card.json` | Nhãn, input, ngưỡng, SHA-256 và kết quả kiểm tra chuyển đổi |
+| `export_detector.py` | Chuẩn bị YOLO-World khi thay model; `models/box_detector.onnx` đã xuất sẵn |
+| `prepare_dataset.py`, `evaluate.py` | Chia tập theo hộp và đánh giá/hiệu chỉnh trên dữ liệu mới |
+| `export_dummy_model.py`, `samples/` | Chỉ phục vụ unit test; không dùng đánh giá chất lượng model thật |
 
-Số lượng: **300–500 ảnh mỗi lớp** (AI-02), tương đương ~40–60 hộp/lớp. Tối thiểu để chạy được pipeline: 100 ảnh/lớp.
-Lớp: mặc định 2 lớp `ok` / `defect`; nếu muốn 4 lớp thì chụp vào `tear`, `dent`, `wet` (`crush` nếu có) — `prepare_dataset.py --classes 2`
-sẽ tự gộp các lớp lỗi về `defect`.
+Đã bỏ các notebook trùng ở gốc và các đường train ConvNeXt/distillation, YOLO classification, Keras MobileNetV2 cũ. Chế độ dummy/samples vẫn được giữ để test QR, UART, orchestrator độc lập với model thật.
 
-**Bổ sung ảnh khó khi model sai** (vòng active learning): ảnh bị loại được lưu ở `/var/lib/sorter/defects/` trên Pi, kèm
-`ai_conf` (xác suất lớp đã chọn) và `ai_types_json` trong DB `packages`. Định kỳ chép về, xem lại:
-- lỗi bị bỏ sót (thật DEFECT, model nói OK) → chụp thêm 20–30 ảnh cùng kiểu lỗi, nhiều hộp;
-- hàng tốt bị loại (thật OK, model nói DEFECT/UNCERTAIN) → chụp thêm hộp lành có đặc điểm gây nhầm (nhãn tối, bóng đổ, băng keo đen);
-- gán nhãn đúng vào `dataset/<lớp>/` với box_id mới, chạy lại `prepare_dataset.py` → train → `evaluate.py`;
-- tăng `version` trong model_card (`--version 1.1.0`) để dashboard hiện đúng `model_version`.
+## Quy trình ảnh và quyết định
 
-## 2. Chuẩn bị dữ liệu (AI-02)
-
-```
-python ai/prepare_dataset.py --src dataset --out ai/data --classes 2        # hoặc --classes 4, --link để symlink
-```
-- loại ảnh hỏng (PIL verify), thống kê theo lớp và theo hộp, cảnh báo lớp lệch > 1,5 lần hoặc < 300 ảnh;
-- chia 70/15/15 **theo box_id** (`GroupShuffleSplit`, seed 42), kiểm tra không hộp nào nằm ở 2 tập;
-- xuất `ai/data/{train,val,test}/<lớp>/` (cấu trúc ultralytics classify) + `split.json`.
-
-## 3. Ba đường huấn luyện (AI-03)
-
-| | Notebook chính thức `train_packaging_damage.ipynb` | `train_yolo_cls.*` | `train_mobilenetv2.py` |
-|---|---|---|---|
-| Kiến trúc | ConvNeXt-V2-tiny (thầy) → chưng cất **MobileNetV4-conv-medium** (trò), 2 đầu: OK/Lỗi + loại lỗi | YOLOv8n-cls | MobileNetV2 (Keras) |
-| Dữ liệu | ảnh tự chụp + Roboflow/Kaggle/HF/web (lọc CLIP, pHash), lỗi tổng hợp, sampler cân bằng | `ai/data` từ prepare_dataset | `ai/data` |
-| Ảnh vào | 256×256 RGB 0..1, chuẩn hóa nhúng trong model | 224 RGB 0..1 | 224 RGB **−1..1** (`model_card.input.range`) |
-| Xuất | `packaging_cls.onnx` (FP32 hoặc INT8 QDQ) — outputs `probs` [OK, DEFECT] + `type_probs` [tear, dent, crush, wet] | `packaging_cls.onnx` opset 12 — 1 output [N,C] | `packaging_cls_fp16.tflite`, `packaging_cls_int8.tflite` |
-| Ngưỡng | temperature scaling + chọn trên val (recall ≥ 95 %) ngay trong notebook | `evaluate.py --update-card` | `evaluate.py` (chuyển sang ONNX) hoặc chọn tay |
-| Backend Pi | `onnx` | `onnx` | `tflite` |
-| Khi nào dùng | **Mặc định** — chính xác nhất, chạy Colab GPU ~1 h | khi cần train nhanh / ít ảnh | khi cần TFLite int8 |
-
-Đường 2 trên Colab: mở `ai/train_yolo_cls.ipynb`, nén `dataset/` thành `MyDrive/smart_sorter/dataset.zip`, Runtime GPU, chạy
-tất cả ô. Trên laptop:
-```
-python ai/train_yolo_cls.py --data ai/data --epochs 50 --out ai/runs/yolo_cls --version 1.0.0
-python ai/evaluate.py --model ai/runs/yolo_cls/export/packaging_cls.onnx --data ai/data --update-card
-```
-Đường 3:
-```
-python ai/train_mobilenetv2.py --data ai/data --out ai/runs/mnv2
+```text
+Picamera2 RGB → xác thực QR → camera.roi
+    → YOLO-World tìm cardboard box (nếu bật)
+    → phải có đúng 1 hộp sau confidence, lọc diện tích và NMS
+    → crop hộp + padding 10%, giới hạn trong ROI
+    → resize 256×256 INTER_AREA → float32 / 255 → NCHW
+    → MobileNetV4 ONNX (mean/std đã nằm trong graph)
+    → probabilities [normal, damage]
+    → OK / DEFECT / UNCERTAIN → luật QR + AI → UART
 ```
 
-## 4. Đánh giá và chọn ngưỡng (AI-05, AI-07)
+Không chuẩn hóa ImageNet lần thứ hai. Không đổi RGB thành BGR trước classifier. Không áp dụng center crop/letterbox của detector cho classifier: notebook dùng resize trực tiếp.
 
-`ai/evaluate.py` chạy model **qua đúng `OnnxClassifier` của Pi** (tiền xử lý giống lúc triển khai):
-- test: accuracy, precision/recall/F1 từng lớp, AUC, `confusion_matrix.png`, `misclassified_grid.png` (≤ 24 ảnh sai), `metrics.json`;
-- val: quét `defect_threshold` 0,05–0,95, chọn ngưỡng **lớn nhất** còn đạt recall DEFECT ≥ 0,95 (tức `min_confidence`
-  nhỏ nhất đạt mục tiêu — loại ít hàng tốt nhất có thể), ghi `defect_threshold`, `threshold_chosen_on`, `metrics` vào `model_card.json`.
+Nhãn **0 = normal → OK**, **1 = damage → DEFECT**. Đây là classifier nhị phân, không suy ra rách/móp/ướt; `defect_types` luôn rỗng. `p_damage >= 0.5` là DEFECT; nếu chưa đạt thì cần `p_normal >= 0.6` mới OK, còn lại UNCERTAIN. Ngưỡng 0.6 là chính sách thận trọng của hệ thống, chưa được hiệu chỉnh tại trạm. Vì vậy các metric argmax notebook không phải metric của chính sách này.
 
-Quy tắc quyết định trên Pi (`classifier_onnx.decide`):
-```
-p_defect >= defect_threshold → DEFECT  (confidence = p_defect)
-p_ok     >= ai.min_confidence → OK     (confidence = p_ok)
-còn lại                       → UNCERTAIN → orchestrator coi là lỗi (P-05), vào khay Loại
+Detector không tìm được hộp hoặc thấy nhiều hộp → UNCERTAIN và loại hàng. Model lỗi/NaN/Inf → exception và orchestrator REJECT_FAILSAFE. Không âm thầm phân loại cả nền khi detector thất bại. QR vẫn đọc trên khung đầy đủ, không phụ thuộc việc crop AI.
+
+## Thử ngay classifier đã xuất
+
+Từ thư mục `smart-sorter`:
+
+```bash
+python -m pip install -r pi/requirements.txt
+python pi/tools/inspect_package.py --config pi/config.model-check.yaml --image /path/to/box.jpg --full-frame --output pi/run/result.jpg
 ```
 
-## 5. Đưa model lên Pi (AI-04, AI-06)
+Ảnh ở lệnh này phải là ảnh một hộp/ảnh đã crop. Cấu hình `config.model-check.yaml` tắt detector để thử riêng classifier, không cần HMAC/camera/UART/ThingsBoard. Không dùng nó để điều khiển băng chuyền. JSON có xác suất hai lớp và ảnh output có nhãn kết quả.
 
+## Dùng detector đã xuất sẵn
+
+Repo đã có `models/box_detector.onnx` (YOLO-World v2 small, prompt cardboard box). Thử ngay cả luồng:
+
+```bash
+python pi/tools/inspect_package.py --config pi/config.vision-check.yaml --image /path/to/frame.jpg --full-frame --output pi/run/vision-result.jpg
 ```
-# trên laptop (3 file bắt buộc: model + labels + model_card)
-scp packaging_cls.onnx labels.json model_card.json sorter@pi.local:/tmp/
-# trên Pi
-sudo mkdir -p /opt/sorter/models && sudo mv /tmp/{packaging_cls.onnx,labels.json,model_card.json} /opt/sorter/models/
-sudo chown -R sorter:sorter /opt/sorter/models && sudo chmod 644 /opt/sorter/models/*
+
+`--full-frame` chạy tìm hộp trên toàn ảnh. Bỏ cờ này nếu đã căn `camera.roi`. Xem [báo cáo kiểm tra và giới hạn](../docs/AI_VALIDATION.md).
+
+## Xuất lại detector khi cần
+
+YOLO-World hỗ trợ prompt `cardboard box`, không dùng detector COCO thông thường rồi giả định COCO có lớp hộp carton. Đây là detector zero-shot, chưa có số liệu recall trên băng chuyền của nhóm.
+
+Trên laptop có mạng (từ `smart-sorter`):
+
+```bash
+python -m pip install -r ai/requirements-detector.txt
+python ai/export_detector.py --model yolov8s-worldv2.pt --out ai/models --size 640
 ```
-Trong `/etc/sorter/config.yaml`:
+
+Bước này tải trọng số YOLO-World và bộ mã hóa CLIP để nhúng prompt vào ONNX. Khi đã có `box_detector.onnx`, Pi không cần Ultralytics/CLIP/PyTorch và không tải lại. Runtime kiểm tra model có đúng lớp cardboard box và output [1,5,N]. Có thể đổi kích thước detector khi export nhưng phải cập nhật `ai.detection.input_size` tương ứng.
+
+Bật detector trong bản sao `pi/config.model-check.yaml`:
+
 ```yaml
-ai:
-  backend: onnx                  # dummy | onnx | tflite
-  model_path: /opt/sorter/models/packaging_cls.onnx
-  labels_path: /opt/sorter/models/labels.json
-  model_card_path: ""            # rỗng = tự tìm model_card.json cạnh model (khuyên dùng)
-  input_size: 224                # chỉ dùng khi KHÔNG có model_card (notebook nhóm dùng 256 — card tự ghi đè)
-  min_confidence: 0.6
-  threads: 4
+  detection:
+    backend: yolo_world_onnx
+    model_path: ../ai/models/box_detector.onnx
+    confidence: 0.35
+    iou_threshold: 0.5
+    input_size: 640
+    padding: 0.1
+    min_area_ratio: 0.01
 ```
-`sudo systemctl restart sorter` → log phải có `OnnxClassifier sẵn sàng: packaging_cls.onnx v1.0.0 …`; `model_version`
-được gửi lên ThingsBoard dạng attribute. Chạy sim trên laptop với model giả: đặt `backend: onnx`,
-`model_path: ../ai/samples/dummy_packaging_cls.onnx`, `labels_path: ../ai/samples/labels.json` trong `pi/config.sim.yaml`.
 
-TFLite: `backend: tflite`, `model_path: …/packaging_cls_int8.tflite`, cài `pip install tflite-runtime` trên Pi.
+`confidence` của detector độc lập với `min_confidence` của classifier. Thử ảnh toàn cảnh bằng `inspect_package.py`; bỏ `--full-frame` để dùng ROI đã cấu hình. `boxes_in_roi` và log ghi tọa độ, score hộp; ảnh output vẽ box có padding. NMS gộp dự đoán trùng trước khi kiểm tra số hộp.
 
-## 6. Benchmark trên Pi (AI-05)
+## Triển khai Raspberry Pi
 
+Script `pi/scripts/install_pi.sh` tự cài bộ model xuất sẵn khi chưa có model trong `/opt/sorter/models/`; không ghi đè bộ model đã tồn tại. Nếu triển khai thủ công hoặc cập nhật model, copy **cùng phiên bản** các file ONNX, labels và model_card vào `/opt/sorter/models/`. Nếu bật detector, copy thêm `box_detector.onnx`. Không cần copy `.pth` lên Pi.
+
+```bash
+scp ai/models/packaging_cls.onnx ai/models/labels.json ai/models/model_card.json sorter@pi.local:/tmp/
+# Nếu đã xuất detector:
+scp ai/models/box_detector.onnx sorter@pi.local:/tmp/
 ```
-cd ~/smart-sorter/pi
-python tools/benchmark_model.py --config /etc/sorter/config.yaml --runs 100 --warmup 10 --image /var/lib/sorter/defects/<anh>.jpg
-# hoặc không cần config:
-python tools/benchmark_model.py --model /opt/sorter/models/packaging_cls.onnx --threads 4 --roi 320,160,640,640
+
+Trên Pi, chuyển các file từ `/tmp/` vào `/opt/sorter/models/` bằng sudo, đảm bảo user sorter đọc được. Dùng `pi/config.example.yaml` làm cấu hình `/etc/sorter/config.yaml`; mẫu này bật detector, nên phải có file detector trước khi chạy. Nếu chưa chuẩn bị detector, đặt `ai.detection.backend: none` và căn ROI cố định chứa đúng một hộp; chế độ này **không xác minh có hộp**.
+
+Classifier dùng input_size 256, threads 4; detector dùng 640. Chỉnh `camera.roi` theo camera thật, khóa AE/AWB, ánh sáng ổn định. Chạy:
+
+```bash
+python pi/tools/inspect_package.py --config /etc/sorter/config.yaml --image /path/to/camera-frame.jpg --output /tmp/check.jpg
+python pi/tools/benchmark_model.py --config /etc/sorter/config.yaml --image /path/to/camera-frame.jpg --runs 100 --warmup 10 --out /tmp/benchmark.json
+sudo systemctl restart sorter
 ```
-In mean / p50 / p95 / max (ms, gồm crop + resize + chuẩn hóa + session.run), RAM RSS trước/sau, ghi `benchmark.json`.
-Mục tiêu 5.3: **≤ 150 ms trung bình**. Nếu chậm: dùng bản INT8 của notebook, giảm `threads` về 4 (Pi 4 có 4 lõi), hoặc giảm
-`img_size` xuống 224 trong notebook.
 
-## 7. Bảng kết quả mẫu cho slide (điền số thật sau khi train)
+Benchmark dùng cả detector nếu được bật. Phải đo thời gian đầy đủ trên Pi và đối chiếu timeout quyết định ESP32; không tăng timeout một cách tùy ý để che model quá chậm. Chỉ bật băng sau khi xác nhận crop hộp đúng, đủ trường hợp hộp lỗi/tốt, nền trống, nhiều hộp và mất kết nối. Nếu detector quá chậm, có thể export input nhỏ hơn rồi đánh giá lại độ phủ, hoặc fine-tune detector nhỏ trên ảnh trạm.
 
-| Chỉ số | Cách đo | Kết quả |
-|---|---|---|
-| Số ảnh dataset (OK / Lỗi), số hộp | `prepare_dataset.py` | ___ / ___ ảnh, ___ hộp |
-| Accuracy trên test | `evaluate.py` → `metrics.json` | ___ % (mục tiêu ≥ 90 %) |
-| Recall lớp Lỗi / Precision lớp Lỗi | `evaluate.py` | ___ % (≥ 95 %) / ___ % |
-| Recall lớp OK (1 − tỉ lệ loại nhầm hàng tốt) | `evaluate.py` | ___ % |
-| Ngưỡng DEFECT chọn trên val | `model_card.defect_threshold` | ___ |
-| Thời gian suy luận trên Pi 4 (mean / p95) | `benchmark_model.py` 100 lần | ___ ms / ___ ms (≤ 150 ms) |
-| RAM tiến trình khi nạp model | `benchmark_model.py` | ___ MB |
-| Kích thước model | `ls -l` | ___ MB (FP32) / ___ MB (INT8) |
-| Phiên bản model | `model_card.version` | ___ |
+## Khi có checkpoint mới
 
-Số tham khảo với model giả trên laptop (chỉ để kiểm tra đường đi, KHÔNG đưa vào slide): mean ≈ 8 ms (trong đó session.run 0,3 ms),
-RAM 37 → 72 MB. MobileNetV4-medium 256 px FP32 trên Pi 4 thường ở mức 60–120 ms, INT8 ~40–80 ms; YOLOv8n-cls 224 ~30–60 ms.
-
-## 8. Test
-
+```bash
+python -m pip install -r ai/requirements.txt
+python ai/export_model.py --checkpoint ai/best_model.pth --out ai/models
 ```
-cd pi && PYTHONUTF8=1 python -m pytest -q tests/test_classifier_onnx.py   # cần onnxruntime + onnx, tự skip nếu thiếu
-python ai/export_dummy_model.py                                            # tạo lại ai/samples
+
+Script nạp `weights_only=True`, strict state_dict, export FP32 + Softmax + normalization bên trong graph; chạy ONNX checker và so sánh 5 đầu vào với PyTorch (rtol 1e-4, atol 1e-5, cùng argmax). Lần export hiện tại có max_abs_error 2.384185791015625e-7. Đây là kiểm tra chuyển đổi, không phải đo accuracy.
+
+## Đánh giá và giới hạn số liệu
+
+Output notebook báo accuracy 0.9725, precision damage 0.9827, recall damage 0.9703, F1 0.9765, AP 0.9915. Chưa tái đánh giá vì repo không có tập test gốc. Không diễn giải thành độ chính xác thực tế trên Pi hoặc của detector.
+
+Notebook gộp dữ liệu rồi chia ngẫu nhiên theo ảnh (có nguồn đã chia train/valid/test), nên có nguy cơ ảnh cùng hộp/ảnh gần trùng nằm ở các tập khác nhau. Notebook cũng định nghĩa PATIENCE nhưng vòng train chưa áp dụng early stopping. Không sửa lại lịch sử train của checkpoint; nếu train mới, dùng group split theo hộp, khử trùng trước khi chia và giữ tập test độc lập. Các số liệu hiện có chỉ là tham khảo.
+
+Thu ảnh camera tại trạm và gán nhãn `normal/damage`, tách val/test theo hộp; công cụ `prepare_dataset.py` hỗ trợ group split cho dữ liệu thu tại trạm. `evaluate.py` nhận thư mục `val/normal`, `val/damage`, `test/normal`, `test/damage`:
+
+```bash
+python ai/evaluate.py --model ai/models/packaging_cls.onnx --data ai/data --out ai/evaluation --update-card
 ```
+
+Chỉ chọn ngưỡng trên val, đo lại trên test độc lập. Lệnh này đánh giá classifier trên ảnh hộp đã crop; đánh giá detector + classifier cần ảnh toàn cảnh và ground truth hộp riêng. Chưa có dữ liệu đó trong repo. Một ảnh nguồn chỉ có annotation box vẫn được notebook gán normal do không thấy từ khóa defect; cần rà soát cách gán nhãn này trước khi train tiếp. Khóa Roboflow từng có trong notebook cần được thu hồi/đổi trong tài khoản; bản notebook mới chỉ đọc biến môi trường.
+
+## Kiểm thử
+
+```bash
+cd pi
+python -m pytest -q
+```
+
+Test mới kiểm tra model thật và hash, tiền xử lý, nhãn, parity, NMS, crop đúng vùng, không hộp/nhiều hộp, sai model detector và kết nối factory với ONNX. Detector ONNX tổng hợp trong unit test chỉ xác minh đường đi mã; không chứng minh detector nhận ra hộp thật.
+
+Nguồn: [YOLO-World Ultralytics](https://docs.ultralytics.com/models/yolo-world/), [torch.load](https://docs.pytorch.org/docs/stable/generated/torch.load.html).

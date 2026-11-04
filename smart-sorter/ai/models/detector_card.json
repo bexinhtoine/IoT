@@ -1,0 +1,16 @@
+{
+  "source": "yolov8s-worldv2.pt",
+  "classes": [
+    "cardboard box"
+  ],
+  "input_size": 640,
+  "output": [
+    1,
+    5,
+    8400
+  ],
+  "sha256": "b12ef7ca9ebf6d37e9b99ba3c3b9a2640d884b7101eee609d611c1f1111e90fb",
+  "note": "Zero-shot detector; chưa đánh giá recall trên băng chuyền thật.",
+  "license": "AGPL-3.0 License (https://ultralytics.com/license)",
+  "source_url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8s-worldv2.pt"
+}

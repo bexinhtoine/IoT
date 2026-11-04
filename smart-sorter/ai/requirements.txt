@@ -7,10 +7,7 @@ matplotlib>=3.7
 PyYAML>=6.0
 onnx>=1.14
 onnxruntime>=1.16
-# --- Đường train 1: notebook chính thức train_packaging_damage.ipynb (timm ConvNeXt-V2 -> distill MobileNetV4) ---
-# torch, torchvision, timm>=1.0.15, albumentations>=2.0.5, onnxscript, open_clip_torch, roboflow, kaggle, huggingface_hub
-# (notebook tự pip install ở ô 0)
-# --- Đường train 2: YOLOv8n-cls ---
-# ultralytics>=8.1
-# --- Đường train 3: MobileNetV2 Keras -> TFLite ---
-# tensorflow>=2.15
+# Export đúng kiến trúc 3-best.ipynb. Không cần các gói này trên Pi.
+torch>=2.6,<3
+torchvision>=0.21
+timm==1.0.19

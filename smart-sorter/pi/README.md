@@ -125,3 +125,7 @@ Thiếu module P4/P5 khi bật → `ConfigError` rõ ràng lúc khởi động; 
   `sign(key, pkg_id, warehouse, ts)`, `make_code(key, pkg_id, warehouse, ts=None, forge=False)`, `load_hmac_key(path)`.
 - `decide(qr: QrResult|None, ai: ClassResult|None, failsafe=False) -> Decision(target: SortTarget, code, reason: SortReason, detail)`.
 - `Orchestrator.health_snapshot()` (cho RPC getStatus), `run_once_sim(n)`, `records`, `conveyor_state`.
+
+## Model AI hiện hành (2026-11-04)
+
+Dùng MobileNetV4 từ `ai/3-best.ipynb`, ONNX FP32 256×256 đã xuất sẵn trong `ai/models/`. Cách thử ảnh, bật YOLO-World tìm hộp và copy model lên Pi: [ai/README.md](../ai/README.md). Runtime không export hoặc tải model khi chạy.

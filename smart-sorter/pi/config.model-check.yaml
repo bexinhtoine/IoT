@@ -1,0 +1,12 @@
+# Kiểm tra ảnh trên laptop: không cần HMAC, UART, camera CSI hoặc ThingsBoard.
+# Dùng với tools/inspect_package.py --full-frame; không dùng cấu hình này điều khiển máy.
+ai:
+  backend: onnx
+  model_path: ../ai/models/packaging_cls.onnx
+  labels_path: ../ai/models/labels.json
+  model_card_path: ../ai/models/model_card.json
+  input_size: 256
+  min_confidence: 0.6
+  threads: 4
+  detection:
+    backend: none

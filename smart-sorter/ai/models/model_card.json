@@ -1,0 +1,60 @@
+{
+  "version": "3-best-mobilenetv4-fp32",
+  "architecture": "mobilenetv4_conv_medium.e500_r256_in1k",
+  "source_notebook": "3-best.ipynb",
+  "checkpoint": "best_model.pth",
+  "checkpoint_sha256": "3a7666b736b7b11f58061de9ec78208f4049446588859701984caa6d92d466a5",
+  "onnx_sha256": "a2861be9ff1922b9e0a918f915f909eb10e4b09fbfc372a73f27c64d4f2a8251",
+  "input": {
+    "name": "image",
+    "shape": [
+      1,
+      3,
+      256,
+      256
+    ],
+    "size": 256,
+    "layout": "NCHW",
+    "color": "RGB",
+    "range": [
+      0,
+      1
+    ],
+    "resize": "INTER_AREA",
+    "normalization_embedded": true
+  },
+  "classes": [
+    "normal",
+    "damage"
+  ],
+  "outputs": {
+    "probabilities": [
+      "normal",
+      "damage"
+    ]
+  },
+  "output_activation": "probabilities",
+  "damage_types": [],
+  "defect_threshold": 0.5,
+  "min_confidence": 0.6,
+  "threshold_note": "0.5 = argmax notebook; p_normal < 0.6 bị loại UNCERTAIN. Chưa hiệu chỉnh tại trạm.",
+  "notebook_reported_test_metrics": {
+    "accuracy": 0.9725,
+    "precision_damage": 0.9827,
+    "recall_damage": 0.9703,
+    "f1_damage": 0.9765,
+    "average_precision_damage": 0.9915
+  },
+  "metrics_note": "Chép từ output notebook, chưa tái đánh giá vì không có tập test gốc.",
+  "parity": {
+    "samples": 5,
+    "max_abs_error": 2.384185791015625e-07,
+    "rtol": 0.0001,
+    "atol": 1e-05
+  },
+  "export_versions": {
+    "torch": "2.5.1+cu121",
+    "onnx": "1.23.2",
+    "onnxruntime": "1.31.1"
+  }
+}

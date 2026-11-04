@@ -4,8 +4,9 @@ Hai lớp cùng giao diện `Classifier` (interfaces.py):
 - OnnxClassifier  : onnxruntime CPUExecutionProvider (mặc định cho Pi 4).
 - TfliteClassifier: tflite_runtime (dự phòng: tensorflow.lite), hỗ trợ model int8 lượng tử.
 
-Hỗ trợ hai kiểu model:
-(a) kiểu notebook nhóm (ai/train_packaging_damage.ipynb): input "image" NCHW RGB 0..1, chuẩn hóa đã nhúng,
+Model hiện hành ai/3-best.ipynb: generic probabilities [normal, damage], RGB 256, normalization trong graph.
+Hỗ trợ thêm hai kiểu model legacy:
+(a) kiểu legacy hai đầu ra: input "image" NCHW RGB 0..1, chuẩn hóa đã nhúng,
     outputs "probs" [N,2] = [OK, DEFECT] và "type_probs" [N,K] sigmoid theo damage_types.
 (b) kiểu YOLOv8-cls / generic: một output [N,C] (softmax nếu tổng ≠ 1), tên lớp lấy từ labels.json;
     lớp ok/good/intact → OK, mọi lớp khác (defect/tear/dent/crush/wet…) → DEFECT.
@@ -19,6 +20,7 @@ Quy tắc quyết định ưu tiên an toàn (AI-07):
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import time
 from dataclasses import dataclass, field
@@ -135,6 +137,8 @@ def build_spec(cfg: AiCfg) -> ModelSpec:
     lp = Path(cfg.labels_path) if cfg.labels_path else None
     if lp is not None and lp.exists():
         classes = load_labels(lp)
+        if spec.card.get("classes") and classes != spec.classes:
+            raise ModelLoadError("labels.json khác thứ tự classes trong model_card.json")
         if spec.kind == KIND_GENERIC or not spec.card.get("outputs"):
             spec.classes = classes
     elif spec.kind == KIND_GENERIC and not spec.card:
@@ -205,6 +209,8 @@ def preprocess(image: np.ndarray, roi: tuple[int, int, int, int] | None, spec: M
     """crop_roi → resize (S,S) INTER_AREA → float32 theo value_range (→ mean/std) → NCHW hoặc NHWC, batch 1."""
     if image is None or image.ndim != 3 or image.shape[2] != 3:
         raise ValueError(f"Ảnh phải là HxWx3 RGB uint8, nhận shape {None if image is None else image.shape}")
+    if image.dtype != np.uint8 or image.shape[0] == 0 or image.shape[1] == 0:
+        raise ValueError("Ảnh phải là RGB uint8 không rỗng (0..255)")
     img = crop_roi(image, roi)
     S = spec.input_size
     if img.shape[0] != S or img.shape[1] != S:
@@ -237,6 +243,8 @@ def decide(p_ok: float, p_defect: float, defect_threshold: float, min_confidence
 
 def interpret(outputs: dict[str, np.ndarray], spec: ModelSpec, infer_ms: float) -> ClassResult:
     """Diễn giải đầu ra model (dict tên→mảng) thành ClassResult theo kiểu model."""
+    if any(not np.isfinite(value).all() for value in outputs.values()):
+        raise ModelLoadError("Model trả NaN/Inf; từ chối kết quả suy luận")
     if spec.kind == KIND_BINARY_TYPES:
         probs = np.asarray(outputs[spec.probs_output], np.float64).reshape(-1)
         if probs.size != 2:
@@ -258,7 +266,15 @@ def interpret(outputs: dict[str, np.ndarray], spec: ModelSpec, infer_ms: float) 
     raw = np.asarray(outputs[spec.probs_output], np.float64).reshape(-1)
     if raw.size != len(spec.classes):
         raise ModelLoadError(f"Output có {raw.size} lớp nhưng labels.json có {len(spec.classes)}: {spec.classes}")
-    probs = raw if (0.98 <= raw.sum() <= 1.02 and raw.min() >= 0.0) else softmax(raw)
+    activation = spec.card.get("output_activation", "auto")
+    if activation == "probabilities":
+        if raw.min() < 0 or raw.max() > 1 or not np.isclose(raw.sum(), 1.0, atol=1e-4):
+            raise ModelLoadError("Model khai báo probabilities nhưng đầu ra không hợp lệ")
+        probs = raw
+    elif activation == "logits":
+        probs = softmax(raw)
+    else:
+        probs = raw if (0.98 <= raw.sum() <= 1.02 and raw.min() >= 0.0) else softmax(raw)
     ok_idx, def_idx = spec.ok_indices, spec.defect_indices
     if not ok_idx:
         raise ModelLoadError(f"labels.json không có lớp hàng tốt (ok/good/intact): {spec.classes}")
@@ -321,6 +337,9 @@ class OnnxClassifier(Classifier):
         if not model_path.exists():
             raise ModelLoadError(f"ai.model_path không tồn tại: {model_path}")
         self.spec = build_spec(cfg)
+        expected_sha = self.spec.card.get("onnx_sha256")
+        if expected_sha and hashlib.sha256(model_path.read_bytes()).hexdigest() != expected_sha:
+            raise ModelLoadError("SHA-256 model ONNX khác model_card.json; copy lại đúng bộ model/labels/card")
         so = ort.SessionOptions()
         so.intra_op_num_threads = max(1, int(cfg.threads))
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL

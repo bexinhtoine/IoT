@@ -595,6 +595,8 @@ Không làm: MQTT/ThingsBoard (P5), train model (P4), phát hiện bất thườ
 
 ### P4 — AI kiểm tra bao bì
 
+**Cập nhật triển khai 2026-11-04:** theo model nhóm cung cấp, các đường train YOLO-cls/Keras dưới đây được thay bằng `ai/3-best.ipynb` (MobileNetV4, RGB 256, normal/damage), checkpoint `best_model.pth` và ONNX FP32 xuất sẵn. Bước phát hiện hộp dùng YOLO-World ONNX độc lập. Hướng dẫn hiện hành: [ai/README.md](../ai/README.md). Khối prompt bên dưới được giữ làm lịch sử đặc tả.
+
 ```
 # MODULE P4 — AI kiểm tra bao bì (AI-01 → AI-07, P-05)
 

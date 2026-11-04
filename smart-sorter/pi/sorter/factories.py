@@ -23,17 +23,30 @@ def make_camera(cfg: SorterConfig) -> Camera:
 
 def make_classifier(cfg: SorterConfig, label_hint: Callable[[], str | None] | None = None) -> Classifier:
     backend = cfg.ai.backend
+    if cfg.ai.detection.backend not in ("none", "yolo_world_onnx"):
+        raise ConfigError(f"ai.detection.backend không hợp lệ: {cfg.ai.detection.backend}")
     if backend == "dummy":
+        if cfg.ai.detection.backend != "none":
+            raise ConfigError("Không được ghép detector thật với classifier dummy")
         return DummyClassifier(cfg.ai, label_hint)
     try:
         from .classifier_onnx import OnnxClassifier, TfliteClassifier  # type: ignore[import-not-found]
     except ImportError as e:
         raise ConfigError(f"ai.backend={backend} cần module sorter.classifier_onnx (P4) và onnxruntime/tflite: {e}") from e
     if backend == "onnx":
-        return OnnxClassifier(cfg.ai)
-    if backend == "tflite":
-        return TfliteClassifier(cfg.ai)
-    raise ConfigError(f"ai.backend không hợp lệ: {backend}")
+        classifier = OnnxClassifier(cfg.ai)
+    elif backend == "tflite":
+        classifier = TfliteClassifier(cfg.ai)
+    else:
+        raise ConfigError(f"ai.backend không hợp lệ: {backend}")
+    if cfg.ai.detection.backend == "yolo_world_onnx":
+        from .box_detector import BoxDetector, DetectedBoxClassifier
+        try:
+            return DetectedBoxClassifier(classifier, BoxDetector(cfg.ai.detection, cfg.ai.threads))
+        except Exception:
+            classifier.close()
+            raise
+    return classifier
 
 
 def make_telemetry(cfg: SorterConfig) -> TelemetrySink:

@@ -31,7 +31,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip python3-picamera2 python3-libcamera python3-opencv \
-  libzbar0 libatlas-base-dev libopenblas0 sqlite3 git
+  libzbar0 libatlas-base-dev libopenblas0 sqlite3 git rsync
 # libatlas-base-dev có thể không còn trên Bookworm; không coi là lỗi
 true
 
@@ -40,6 +40,24 @@ rsync -a --delete --exclude 'run/' --exclude '__pycache__' --exclude '.pytest_ca
   "$SRC_DIR/sorter" "$SRC_DIR/tools" "$SRC_DIR/tests" "$SRC_DIR/requirements.txt" "$SRC_DIR/pyproject.toml" \
   "$SRC_DIR/README.md" "$SRC_DIR/config.example.yaml" "$APP_DIR/"
 chown -R root:root "$APP_DIR"
+
+echo "== 4b. Model ONNX đã xuất sẵn (không export hoặc tải model trên Pi)"
+MODEL_SRC="$SRC_DIR/../ai/models"
+MODEL_FILES=(packaging_cls.onnx labels.json model_card.json box_detector.onnx detector_card.json)
+models_available=true
+models_installed=false
+for model_file in "${MODEL_FILES[@]}"; do
+  [[ -f "$MODEL_SRC/$model_file" ]] || models_available=false
+  [[ ! -e "$APP_DIR/models/$model_file" ]] || models_installed=true
+done
+if [[ "$models_available" == true && "$models_installed" == false ]]; then
+  for model_file in "${MODEL_FILES[@]}"; do
+    install -m 644 -o root -g root "$MODEL_SRC/$model_file" "$APP_DIR/models/$model_file"
+  done
+  echo "   Đã cài classifier 3-best + detector YOLO-World; xem ai/README.md để căn ROI và kiểm tra ảnh."
+else
+  echo "   Giữ model đang có hoặc thiếu bộ model nguồn; copy đồng bộ ai/models/ theo ai/README.md."
+fi
 
 echo "== 5. venv (--system-site-packages để dùng picamera2/libcamera từ apt)"
 if [[ ! -x "$APP_DIR/venv/bin/python" ]]; then
@@ -80,7 +98,8 @@ cat <<'EOF'
     rồi: sudo systemctl disable hciuart
  c) Bật camera CSI (Bookworm bật sẵn libcamera; kiểm tra: rpicam-hello --list-cameras)
  d) Chép chứng chỉ ThingsBoard vào /etc/sorter/certs/ (ca.pem, device.pem, device.key; quyền 600, chủ sorter)
-    và model AI vào /opt/sorter/models/ (packaging_cls.onnx, labels.json, model_card.json)
+    Kiểm tra model AI trong /opt/sorter/models/ (packaging_cls.onnx, labels.json, model_card.json,
+    box_detector.onnx, detector_card.json); bước 4b cài sẵn nếu chưa có model.
  e) Kiểm tra cấu hình:  sudo -u sorter /opt/sorter/venv/bin/python -c "from sorter.config import load_config; load_config('/etc/sorter/config.yaml'); print('OK')"
     (chạy trong /opt/sorter)
  f) sudo reboot; sau đó: sudo systemctl start sorter && journalctl -u sorter -f
