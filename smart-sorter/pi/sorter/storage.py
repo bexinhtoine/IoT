@@ -1,4 +1,4 @@
-"""P-09 — Lưu trữ SQLite (WAL, thread-safe) cho sorter-core.
+"""P-09 — PostgreSQL / SQLite storage with atomic parcel persistence.
 
 Bảng: packages, used_codes, rpc_audit, security_events, system_events, counters, schema_version.
 Migration đơn giản theo schema_version (MIGRATIONS[n] = câu lệnh nâng từ n-1 lên n).
@@ -10,15 +10,17 @@ import logging
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Iterator
 from contextlib import contextmanager
 
 from .interfaces import SecurityEvent
+from .database import open_database
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, list[str]] = {
     1: [
@@ -78,12 +80,20 @@ MIGRATIONS: dict[int, list[str]] = {
             value INTEGER NOT NULL DEFAULT 0
         )""",
     ],
+    2: [
+        "ALTER TABLE packages ADD COLUMN record_uid TEXT",
+        "ALTER TABLE packages ADD COLUMN sort_sent INTEGER",
+        "ALTER TABLE packages ADD COLUMN sort_error TEXT",
+        "ALTER TABLE packages ADD COLUMN error TEXT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_packages_record_uid ON packages(record_uid)",
+    ],
 }
 
 PACKAGE_COLUMNS: tuple[str, ...] = (
     "ts_ms", "pkg_seq", "pkg_id", "warehouse", "qr_status", "ai_label", "ai_conf", "ai_types_json",
     "decision", "reason", "target", "t_capture_ms", "t_qr_ms", "t_verify_ms", "t_ai_ms", "latency_ms",
     "defect_image_path",
+    "record_uid", "sort_sent", "sort_error", "error",
 )
 
 
@@ -92,29 +102,29 @@ def now_ms() -> int:
 
 
 class Storage:
-    """SQLite WAL; mọi thao tác qua một lock nên an toàn giữa các thread."""
+    """Thread-safe PostgreSQL or SQLite storage, with optional local parcel journal."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, outbox_path: str | Path | None = None) -> None:
         self.db_path = str(db_path)
-        if self.db_path != ":memory:":
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=5.0, isolation_level=None)
-        self._conn.row_factory = sqlite3.Row
-        try:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.DatabaseError:  # :memory: không hỗ trợ WAL
-            pass
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn = open_database(self.db_path)
         self._migrate()
         self._closed = False
+        self._outbox = None
+        if getattr(self._conn, "postgres", False) and outbox_path is not None:
+            self._outbox = open_database(outbox_path)
+            self._outbox.execute("CREATE TABLE IF NOT EXISTS pending_packages (record_uid TEXT PRIMARY KEY, payload TEXT NOT NULL, counter_name TEXT NOT NULL)")
+            self.flush_pending_packages()
 
     # ------------------------------------------------------------------ transaction
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         """BEGIN IMMEDIATE ... COMMIT/ROLLBACK trong lock."""
         with self._lock:
+            if getattr(self._conn, "postgres", False):
+                with self._conn.raw.transaction():
+                    yield self._conn
+                return
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self._conn
@@ -124,16 +134,17 @@ class Storage:
                 raise
 
     def _migrate(self) -> None:
-        with self._lock:
+        with self.transaction():
+            if getattr(self._conn, "postgres", False):
+                self._conn.execute("SELECT pg_advisory_xact_lock(731204502)")
             self._conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
             row = self._conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
             current = int(row[0]) if row else 0
             for v in range(current + 1, SCHEMA_VERSION + 1):
-                with self.transaction() as c:
-                    for sql in MIGRATIONS.get(v, []):
-                        c.execute(sql)
-                    c.execute("DELETE FROM schema_version")
-                    c.execute("INSERT INTO schema_version(version) VALUES (?)", (v,))
+                for sql in MIGRATIONS.get(v, []):
+                    self._conn.execute(sql)
+                self._conn.execute("DELETE FROM schema_version")
+                self._conn.execute("INSERT INTO schema_version(version) VALUES (?)", (v,))
                 log.info("Storage: nâng schema lên phiên bản %d", v)
 
     @property
@@ -150,13 +161,55 @@ class Storage:
             data["ts_ms"] = now_ms()
         if data["decision"] is None:
             data["decision"] = "REJECT_FAILSAFE"
+        data["record_uid"] = data["record_uid"] or str(uuid.uuid4())
+        if data["sort_sent"] is not None:
+            data["sort_sent"] = int(data["sort_sent"])
         if isinstance(data["ai_types_json"], dict):
             data["ai_types_json"] = json.dumps(data["ai_types_json"], ensure_ascii=False)
         cols = ", ".join(PACKAGE_COLUMNS)
         qs = ", ".join("?" for _ in PACKAGE_COLUMNS)
         with self._lock:
-            cur = self._conn.execute(f"INSERT INTO packages ({cols}) VALUES ({qs})", [data[k] for k in PACKAGE_COLUMNS])
-            return int(cur.lastrowid or 0)
+            cur = self._conn.execute(f"INSERT INTO packages ({cols}) VALUES ({qs}) ON CONFLICT(record_uid) DO NOTHING", [data[k] for k in PACKAGE_COLUMNS])
+            return int(cur.lastrowid or 0) if cur.rowcount else 0
+
+    def _save_package_transaction(self, rec: dict[str, Any], counter_name: str) -> dict[str, int]:
+        with self.transaction() as c:
+            if self.insert_package(rec):
+                for name in ("cnt_total", counter_name):
+                    c.execute(
+                        "INSERT INTO counters(name, value) VALUES (?, 1) ON CONFLICT(name) DO UPDATE SET value = counters.value + 1",
+                        (name,),
+                    )
+            return self.all_counters()
+
+    def save_package_and_counters(self, rec: dict[str, Any], counter_name: str) -> dict[str, int]:
+        """Journal locally first, then commit package and counters atomically.
+
+        record_uid makes retries safe even when a COMMIT acknowledgement is lost.
+        Pending records are replayed on the next successful application startup.
+        """
+        rec = dict(rec)
+        rec.setdefault("record_uid", str(uuid.uuid4()))
+        with self._lock:
+            if self._outbox is not None:
+                self._outbox.execute(
+                    "INSERT INTO pending_packages(record_uid,payload,counter_name) VALUES (?,?,?) ON CONFLICT(record_uid) DO NOTHING",
+                    (rec["record_uid"], json.dumps(rec, ensure_ascii=False), counter_name),
+                )
+            values = self._save_package_transaction(rec, counter_name)
+            if self._outbox is not None:
+                self._outbox.execute("DELETE FROM pending_packages WHERE record_uid=?", (rec["record_uid"],))
+            return values
+
+    def flush_pending_packages(self) -> int:
+        with self._lock:
+            if self._outbox is None:
+                return 0
+            rows = self._outbox.execute("SELECT * FROM pending_packages ORDER BY rowid").fetchall()
+            for row in rows:
+                self._save_package_transaction(json.loads(row["payload"]), row["counter_name"])
+                self._outbox.execute("DELETE FROM pending_packages WHERE record_uid=?", (row["record_uid"],))
+            return len(rows)
 
     def recent_packages(self, n: int = 50) -> list[dict[str, Any]]:
         with self._lock:
@@ -176,11 +229,8 @@ class Storage:
     def try_insert_used_code(self, pkg_id: str, ts_ms: int | None = None) -> bool:
         """Atomic: True nếu pkg_id chưa từng dùng (và vừa được ghi), False nếu đã tồn tại."""
         with self.transaction() as c:
-            exists = c.execute("SELECT 1 FROM used_codes WHERE pkg_id = ?", (pkg_id,)).fetchone()
-            if exists:
-                return False
-            c.execute("INSERT OR IGNORE INTO used_codes(pkg_id, ts_ms) VALUES (?, ?)", (pkg_id, ts_ms or now_ms()))
-            return True
+            cur = c.execute("INSERT INTO used_codes(pkg_id, ts_ms) VALUES (?, ?) ON CONFLICT(pkg_id) DO NOTHING", (pkg_id, ts_ms or now_ms()))
+            return cur.rowcount == 1
 
     def is_code_used(self, pkg_id: str) -> bool:
         with self._lock:
@@ -270,7 +320,7 @@ class Storage:
     def incr_counter(self, name: str, n: int = 1) -> int:
         with self.transaction() as c:
             c.execute(
-                "INSERT INTO counters(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = value + excluded.value",
+                "INSERT INTO counters(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = counters.value + excluded.value",
                 (name, int(n)),
             )
             return int(c.execute("SELECT value FROM counters WHERE name = ?", (name,)).fetchone()[0])
@@ -284,11 +334,14 @@ class Storage:
     def close(self) -> None:
         with self._lock:
             if not self._closed:
-                try:
-                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except sqlite3.DatabaseError:
-                    pass
+                if not getattr(self._conn, "postgres", False):
+                    try:
+                        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except sqlite3.DatabaseError:
+                        pass
                 self._conn.close()
+                if self._outbox is not None:
+                    self._outbox.close()
                 self._closed = True
 
     def __enter__(self) -> "Storage":

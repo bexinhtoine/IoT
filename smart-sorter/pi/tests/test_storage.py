@@ -24,6 +24,36 @@ def test_schema_and_tables(db):
     assert {"packages", "used_codes", "rpc_audit", "security_events", "system_events", "counters", "schema_version"} <= names
 
 
+def test_package_and_counters_atomic_idempotent(db):
+    rec = {"record_uid": "one", "decision": SORT_A}
+    assert db.save_package_and_counters(rec, CNT_A)[CNT_TOTAL] == 1
+    assert db.save_package_and_counters(rec, CNT_A)[CNT_TOTAL] == 1
+    assert db.count_packages() == 1
+    with pytest.raises(RuntimeError):
+        with db.transaction():
+            db.insert_package({"record_uid": "rolled-back", "decision": SORT_A})
+            raise RuntimeError("interrupted")
+    assert db.count_packages() == 1
+
+
+def test_local_journal_survives_failure_and_replays(db, tmp_path, monkeypatch):
+    from sorter.database import open_database
+    db._outbox = open_database(tmp_path / "pending.db")
+    db._outbox.execute("CREATE TABLE pending_packages(record_uid TEXT PRIMARY KEY, payload TEXT NOT NULL, counter_name TEXT NOT NULL)")
+    original = db._save_package_transaction
+    def offline(*args):
+        raise ConnectionError("network interrupted")
+    monkeypatch.setattr(db, "_save_package_transaction", offline)
+    with pytest.raises(ConnectionError):
+        db.save_package_and_counters({"record_uid": "pending", "decision": SORT_A}, CNT_A)
+    assert db._outbox.execute("SELECT COUNT(*) FROM pending_packages").fetchone()[0] == 1
+    monkeypatch.setattr(db, "_save_package_transaction", original)
+    assert db.flush_pending_packages() == 1
+    assert db.get_counter(CNT_TOTAL) == 1
+    assert db.count_packages() == 1
+    assert db.flush_pending_packages() == 0
+
+
 def test_reopen_keeps_data(tmp_path):
     p = tmp_path / "x.db"
     s = Storage(p)

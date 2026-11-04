@@ -106,10 +106,21 @@ class RpcCfg:
 
 @dataclass
 class StorageCfg:
+    backend: str = "sqlite"
+    env_file: str = ".env"
+    database_url: str = field(default="", repr=False)
     db_path: str = "/var/lib/sorter/sorter.db"
     defect_dir: str = "/var/lib/sorter/defects"
     max_defect_images: int = 500
     log_dir: str = "/var/log/sorter"
+
+    @property
+    def target(self) -> str:
+        if self.backend == "postgresql":
+            if not self.database_url.startswith(("postgresql://", "postgres://")):
+                raise ConfigError("PostgreSQL cần SORTER_DATABASE_URL trong môi trường hoặc storage.env_file")
+            return self.database_url
+        return self.db_path
 
 
 @dataclass
@@ -194,6 +205,10 @@ def _coerce(key: str, v: Any, path: str, default: Any, ftype: Any) -> Any:
 def validate(cfg: SorterConfig) -> None:
     """Kiểm tra miền giá trị và sự tồn tại của file bắt buộc (P-01)."""
     errs: list[str] = []
+    if cfg.storage.backend not in ("sqlite", "postgresql"):
+        errs.append("storage.backend phải là sqlite hoặc postgresql")
+    if cfg.storage.backend == "postgresql":
+        cfg.storage.target
     if cfg.camera.source not in ("picamera2", "folder"):
         errs.append("camera.source phải là picamera2 hoặc folder")
     if len(cfg.camera.resolution) != 2 or any(int(x) <= 0 for x in cfg.camera.resolution):
@@ -281,6 +296,10 @@ def load_config(path: str | os.PathLike[str], validate_files: bool = True) -> So
     cfg.source_path = str(p)
     base = p.parent
     _resolve_paths(cfg, base)
+    if cfg.storage.backend == "postgresql":
+        from dotenv import dotenv_values
+        local = dotenv_values(cfg.storage.env_file) if Path(cfg.storage.env_file).exists() else {}
+        cfg.storage.database_url = os.environ.get("SORTER_DATABASE_URL") or local.get("SORTER_DATABASE_URL") or cfg.storage.database_url
     if validate_files:
         validate(cfg)
     return cfg
@@ -303,6 +322,7 @@ def _resolve_paths(cfg: SorterConfig, base: Path) -> None:
     cfg.thingsboard.client_cert = fix(cfg.thingsboard.client_cert)
     cfg.thingsboard.client_key = fix(cfg.thingsboard.client_key)
     cfg.storage.db_path = fix(cfg.storage.db_path)
+    cfg.storage.env_file = fix(cfg.storage.env_file)
     cfg.storage.defect_dir = fix(cfg.storage.defect_dir)
     cfg.storage.log_dir = fix(cfg.storage.log_dir)
     cfg.anomaly.model_path = fix(cfg.anomaly.model_path)

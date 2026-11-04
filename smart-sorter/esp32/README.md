@@ -19,7 +19,7 @@ esp32/
     board/      include/board.h            chân theo SPEC 2.3
     motor/      E-02  L298N, LEDC timer0 1 kHz/10 bit, ramp 200 ms (esp_timer), motor_stop_from_isr()
     servo/      E-04  LEDC timer1 50 Hz/14 bit, 0–180° → 500–2500 µs
-    sensor/     E-03  TCRT5000 (ngắt + 20 ms) | HC-SR04 (task 30 ms, 2 lần < ngưỡng) — Kconfig
+    sensor/     E-03  HC-SR04 duy nhất (70 ms/mẫu, 2 mẫu 20..300 mm, latch chống đếm lặp)
     indicator/  E-06  LED/còi theo pattern, esp_timer 50 ms
     estop/      E-07  GPIO39 ANYEDGE, tắt PWM trong ISR
     link/       E-09 E-10 E-12  UART2, ACK/NACK, gửi lại, chống lặp SEQ, STATUS 1 s, watchdog liên kết
@@ -32,7 +32,7 @@ esp32/
 ```
 
 Sơ đồ phụ thuộc component (không có vòng): `fsm` → {motor, servo, sensor, indicator, estop, link, params, ota_secure};
-`ota_secure` → link; `estop` → motor; `sensor` → params; `link`/`params` → protocol. Các component thấp hơn không
+`ota_secure` → link; `estop` → motor; `link`/`params` → protocol. Các component thấp hơn không
 biết `fsm`: chúng nhận callback lúc init (sensor_init(cb), estop_init(cb), link_init(&cfg), ota_secure_set_status_cb).
 
 ## Build / flash
@@ -56,8 +56,6 @@ file ký là `build/smart_sorter_esp32.bin`.
 | Tùy chọn | Mặc định | Ý nghĩa |
 |---|---|---|
 | `SORTER_HW_TEST` | n | Chế độ kiểm tra đấu dây: motor 2 s → servo A, B → LED xanh, đỏ → còi → in cảm biến/E-stop mỗi 200 ms |
-| `SORTER_SENSOR_TCRT5000` / `SORTER_SENSOR_HCSR04` | TCRT5000 | Loại cảm biến phát hiện kiện |
-| `SORTER_TCRT_ACTIVE_LOW` | y | DO xuống LOW khi có vật |
 | `SORTER_OTA_DEVICE_ID` | sorter-esp32-01 | `device` trong POST /report |
 | `SORTER_OTA_WIFI_TIMEOUT_S` | 20 | chờ IP khi OTA |
 | `SORTER_OTA_SELFTEST_TIMEOUT_S` | 30 | chờ PING sau khi boot bản mới (O-13) |
@@ -70,7 +68,6 @@ file ký là `build/smart_sorter_esp32.bin`.
 | UART2 RX / TX | 16 / 17 | ↔ Pi TX GPIO14 (chân 8) / Pi RX GPIO15 (chân 10); GND chung |
 | Motor ENA / IN1 / IN2 | 25 / 26 / 27 | L298N; nguồn động cơ riêng, GND chung |
 | Servo A / B | 18 / 19 | nguồn 5 V riêng |
-| TCRT5000 DO | 34 | chỉ đọc, pull-up ngoài nếu module không có |
 | HC-SR04 TRIG / ECHO | 13 / 35 | ECHO qua cầu chia áp 1 kΩ–2 kΩ |
 | LED xanh / đỏ | 32 / 33 | qua 220 Ω |
 | Còi | 23 | qua transistor NPN |
@@ -81,8 +78,7 @@ E-stop vật lý phải cắt nguồn động cơ bằng phần cứng; firmware
 ## Hành vi chính
 
 - Máy trạng thái: bảng đầy đủ ở đầu `components/fsm/fsm.c`.
-- Phát hiện kiện (RUNNING): `motor_stop()` ngay trong task fsm (ưu tiên 8, ISR→timer 20 ms→queue; mục tiêu < 20 ms kể từ
-  khi hết chống dội), pkg_seq++, `EVT_PKG_DETECTED`, chờ SORT tối đa `t_decision_timeout`, quá hạn → REJECT/FAILSAFE +
+- Phát hiện kiện (RUNNING): `motor_stop()` ngay trong task fsm (ưu tiên 8, task đo 70 ms → xác nhận 2 mẫu → queue), pkg_seq++, `EVT_PKG_DETECTED`, chờ SORT tối đa `t_decision_timeout`, quá hạn → REJECT/FAILSAFE +
   `EVT_FAULT(DECISION_TIMEOUT)`.
 - Mất liên kết > 2000 ms khi RUNNING/DETECTED/SORTING → FAULT(LINK_LOST); `EVT_FAULT` gửi khi liên kết trở lại;
   thoát bằng `ESTOP_RESET`.
@@ -96,7 +92,7 @@ E-stop vật lý phải cắt nguồn động cơ bằng phần cứng; firmware
 `esp_bench.py` dùng codec P1 qua `/dev/serial0` (hoặc USB-UART trên laptop nối GPIO16/17):
 
 1. PING → PONG(state=IDLE); STATUS tự đến mỗi 1 s.
-2. START(60) → ACK, băng chạy, LED xanh. Đưa tay qua cảm biến → `EVT_PKG_DETECTED(pkg_seq)`, băng dừng.
+2. START(60) → ACK, băng chạy, hai LED tắt. Đưa tay qua cảm biến → `EVT_PKG_DETECTED(pkg_seq)`, băng dừng.
 3. SORT(A, OK, pkg_seq) → ACK; servo A gạt, băng chạy `t_clear_a`, servo về, bíp, `EVT_SORT_DONE`. Lặp với B, REJECT.
 4. SORT với pkg_seq sai → NACK BAD_PARAM; SORT khi RUNNING → NACK BAD_STATE; khung sai CRC → bị bỏ, `crc_err` tăng
    trong STATUS; gửi lại cùng SEQ → chỉ nhận lại ACK, không thực hiện hai lần; SET_PARAM(1, 200) → NACK BAD_PARAM.
@@ -111,7 +107,7 @@ E-stop vật lý phải cắt nguồn động cơ bằng phần cứng; firmware
 | Nơi dùng | API / hành vi cần xác nhận |
 |---|---|
 | motor.c | `gpio_ll_set_level(&GPIO, pin, 0)` (hal/gpio_ll.h), `esp_rom_gpio_connect_out_signal(pin, SIG_GPIO_OUT_IDX, 0, 0)`, `ledc_set_pin()` để gắn lại |
-| sensor.c | `esp_timer_start_once()` gọi từ ISR GPIO (IRAM_ATTR + `portENTER_CRITICAL_SAFE` trong v5.x); `esp_rom_delay_us` |
+| sensor.c | Đo xung ECHO bằng polling có timeout; kiểm tra độ ổn định trên board thật khi UART/OTA hoạt động |
 | link.c | `UART_SCLK_DEFAULT`; `esp_task_wdt_add(NULL)` khi `CONFIG_ESP_TASK_WDT_INIT=y` |
 | ota_secure.c | `esp_http_client`: `HTTP_EVENT_DISCONNECTED/ERROR` mang `esp_tls_error_handle_t` trong `evt->data`; `esp_tls_get_and_clear_last_error`; `ESP_ERR_MBEDTLS_SSL_HANDSHAKE_FAILED`, `ESP_ERR_MBEDTLS_X509_CRT_PARSE_FAILED` (esp_tls_errors.h) |
 | ota_secure.c | `esp_wifi_init/deinit` lặp nhiều lần với cùng netif từ `esp_netif_create_default_wifi_sta()` |
@@ -119,3 +115,9 @@ E-stop vật lý phải cắt nguồn động cơ bằng phần cứng; firmware
 | ota_secure.c | mbedTLS 3.x: `mbedtls_sha256(in, len, out, 0)`, `mbedtls_sha256_starts/update/finish` trả int, `mbedtls_pk_parse_public_key(pk, pem, strlen+1)` |
 | CMakeLists ota_secure | tên symbol `_binary_<file>_start` cho `EMBED_TXTFILES` (dấu `.` → `_`) |
 | sdkconfig.defaults | tên option TWDT (`CONFIG_ESP_TASK_WDT_EN` / `_INIT`), `CONFIG_ESP_TIMER_TASK_STACK_SIZE` |
+
+## Luồng siêu âm → hộp → QR → bao bì
+
+Xem [điều kiện input/output và đèn báo](../docs/DEVICE_IO.md). HC-SR04 đã thay hoàn toàn TCRT5000; GPIO34 không dùng. Ngưỡng cố định 300 mm, hai mẫu liên tiếp; giải phóng latch sau ba mẫu >330 mm hoặc không có ECHO. ECHO stuck HIGH không giải phóng latch. Tham số UART id 11 chỉ nhận 300; NVS cũ 80 sẽ bị kiểm tra miền giá trị và dùng mặc định 300, không cần xóa NVS chứa Wi-Fi.
+
+LED mới: OK xanh 300 ms; DEFECT đỏ 300 ms; NOT_BOX=4 đỏ 3 nhịp rồi tắt. Cần cập nhật cả Pi và ESP32 để hiểu reason mới. Không phát lại đèn khi kết thúc gạt.

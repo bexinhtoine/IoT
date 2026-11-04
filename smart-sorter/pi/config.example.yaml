@@ -61,6 +61,8 @@ rpc:
   esp_timeout_s: 2.0
 
 storage:
+  backend: postgresql
+  env_file: .env
   db_path: /var/lib/sorter/sorter.db
   defect_dir: /var/lib/sorter/defects
   max_defect_images: 500

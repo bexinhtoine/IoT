@@ -54,6 +54,13 @@ class Counters:
             log.info("Counters đã reset")
             return dict(self._values)
 
+    def record_package(self, rec: dict) -> dict[str, int]:
+        name = DECISION_TO_COUNTER.get(rec["decision"], CNT_REJECT_FAILSAFE)
+        with self._lock:
+            values = self._storage.save_package_and_counters(rec, name)
+            self._values = {key: values.get(key, 0) for key in COUNTER_NAMES}
+            return dict(self._values)
+
     def get(self, name: str) -> int:
         with self._lock:
             return self._values.get(name, 0)

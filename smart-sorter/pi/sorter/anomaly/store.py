@@ -1,4 +1,4 @@
-"""P9 / A-01 — Lưu trữ cửa sổ đặc trưng vào SQLite (bảng anomaly_windows).
+"""P9 / A-01 — Lưu cửa sổ đặc trưng vào PostgreSQL hoặc SQLite.
 
 DB dùng chung với storage.py của module P3 (sorter.db). Lớp này chỉ tạo và đụng
 đúng bảng anomaly_windows (CREATE TABLE IF NOT EXISTS), không chạm bảng khác.
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import interfaces
+from ..database import open_database
 
 log = logging.getLogger(__name__)
 
@@ -32,19 +33,9 @@ class AnomalyStore:
 
     def __init__(self, db_path: str) -> None:
         self.db_path = str(db_path)
-        # Tạo thư mục chứa DB nếu cần (trừ khi là :memory:)
-        if self.db_path != ":memory:":
-            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(
-            self.db_path, timeout=5.0, check_same_thread=False
-        )
-        self._conn.row_factory = sqlite3.Row
+        self._conn = open_database(self.db_path)
         with self._lock:
-            # :memory: không hỗ trợ WAL; chỉ bật cho DB file
-            if self.db_path != ":memory:":
-                self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
             self._create_table()
 
     def _create_table(self) -> None:
@@ -62,7 +53,6 @@ class AnomalyStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_anomaly_windows_ts ON anomaly_windows(ts_ms)"
         )
-        self._conn.commit()
 
     def insert_window(
         self,
@@ -87,7 +77,6 @@ class AnomalyStore:
         sql = f"INSERT INTO anomaly_windows ({', '.join(cols)}) VALUES ({placeholders})"
         with self._lock:
             cur = self._conn.execute(sql, vals)
-            self._conn.commit()
             return int(cur.lastrowid)
 
     def update_score(
@@ -103,7 +92,6 @@ class AnomalyStore:
                 "UPDATE anomaly_windows SET score=?, flag=?, top_features=? WHERE id=?",
                 (float(score), 1 if flag else 0, top_features, int(window_id)),
             )
-            self._conn.commit()
 
     def fetch(self, since_ms: int, until_ms: int) -> list[dict[str, Any]]:
         """Lấy các cửa sổ có ts_ms trong [since_ms, until_ms], tăng dần theo thời gian."""

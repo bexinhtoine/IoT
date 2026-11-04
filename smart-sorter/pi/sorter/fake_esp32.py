@@ -508,7 +508,9 @@ class FakeEsp32:
 
     def _cmd_sort(self, f: Frame, key: tuple[int, int]) -> None:
         p = SortPayload.unpack(f.payload)
-        if p.target not in (1, 2, 3) or p.reason not in (0, 1, 2, 3):
+        if (p.target not in (1, 2, 3) or p.reason not in (0, 1, 2, 3, 4)
+                or (p.target != SortTarget.REJECT and p.reason != SortReason.OK)
+                or (p.target == SortTarget.REJECT and p.reason == SortReason.OK)):
             self._send_reply(MsgType.NACK, NackPayload(f.seq, int(NackErr.BAD_PARAM)), key)
             return
         self._send_reply(MsgType.ACK, AckPayload(f.seq), key)

@@ -71,6 +71,10 @@ if [[ ! -f "$CFG_DIR/config.yaml" ]]; then
   install -m 640 -o root -g "$SVC_USER" "$SRC_DIR/config.example.yaml" "$CFG_DIR/config.yaml"
   echo "   Đã tạo $CFG_DIR/config.yaml từ config.example.yaml — sửa lại cho đúng (ai.backend, thingsboard...)"
 fi
+if [[ -f "$SRC_DIR/.env" && ! -f "$CFG_DIR/.env" ]]; then
+  install -m 640 -o root -g "$SVC_USER" "$SRC_DIR/.env" "$CFG_DIR/.env"
+  echo "   Đã cài cấu hình PostgreSQL riêng vào /etc/sorter/.env"
+fi
 if [[ ! -f "$CFG_DIR/secrets/qr_hmac.key" ]]; then
   sudo -u "$SVC_USER" "$APP_DIR/venv/bin/python" "$APP_DIR/tools/make_hmac_key.py" --out "$CFG_DIR/secrets/qr_hmac.key"
   echo "   Đã sinh khóa HMAC mới. Dùng CÙNG khóa này khi in QR (tools/qr_generator.py --key ...)."

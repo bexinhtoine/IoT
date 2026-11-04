@@ -1,5 +1,9 @@
 # sorter-core — phần mềm điều phối trên Raspberry Pi 4 (MODULE P3)
 
+Lưu trữ thật hiện dùng **PostgreSQL / Supabase IOT_Project**, schema `iot_project`.
+Xem [cấu hình, cơ chế lưu bền và chuyển dữ liệu](../docs/DATABASE.md).
+File `.env` giữ connection string riêng; cấu hình mô phỏng vẫn dùng SQLite.
+
 Package Python `sorter` thực hiện P-01 → P-16, S-03, S-09 của `docs/SPEC.md`: đọc cấu hình, camera CSI
 (picamera2), đọc + xác thực QR (HMAC-SHA256), AI kiểm tra bao bì (qua giao diện `Classifier`), quyết định
 theo bảng 1.2, liên kết UART với ESP32, lưu SQLite, bộ đếm, sức khỏe, nhật ký bảo mật, chế độ mô phỏng.

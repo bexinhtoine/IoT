@@ -63,6 +63,7 @@ class SortReason(IntEnum):
     DEFECT = 1
     SECURITY = 2
     FAILSAFE = 3
+    NOT_BOX = 4
 
 
 class OtaStage(IntEnum):
@@ -386,7 +387,7 @@ PARAMS: dict[int, ParamDesc] = {
     8: ParamDesc(8, 't_clear_reject', 'ms', 500, 10000, 5000),
     9: ParamDesc(9, 't_rearm', 'ms', 0, 3000, 500),
     10: ParamDesc(10, 't_decision_timeout', 'ms', 1000, 10000, 3000),
-    11: ParamDesc(11, 'hcsr04_threshold', 'mm', 20, 400, 80),
+    11: ParamDesc(11, 'hcsr04_threshold', 'mm', 300, 300, 300),
 }
 PARAM_BY_NAME: dict[str, ParamDesc] = {p.name: p for p in PARAMS.values()}
 

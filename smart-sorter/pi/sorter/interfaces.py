@@ -65,6 +65,15 @@ class Classifier(ABC):
     """Giao diện bộ phân loại bao bì. Triển khai: DummyClassifier (P3), OnnxClassifier/TfliteClassifier (P4)."""
 
     model_version: str = "dummy"
+    detects_boxes: bool = False
+
+    def prepare_box(self, image: np.ndarray, roi: tuple[int, int, int, int] | None = None) -> np.ndarray | None:
+        """ROI cho simulator/classifier riêng; detector thật override và có thể từ chối vật."""
+        return crop_roi(image, roi)
+
+    def classify_box(self, box: np.ndarray) -> ClassResult:
+        """Phân loại ảnh hộp đã được xác nhận, sau khi QR hợp lệ."""
+        return self.predict(box)
 
     @abstractmethod
     def predict(self, image: np.ndarray, roi: tuple[int, int, int, int] | None = None) -> ClassResult:

@@ -25,7 +25,6 @@
 #define BOARD_SERVO_B_GPIO      19
 
 /* Cảm biến phát hiện kiện (E-03) */
-#define BOARD_TCRT_DO_GPIO      34   /* chỉ đọc, cần pull-up ngoài nếu module không có */
 #define BOARD_HCSR04_TRIG_GPIO  13
 #define BOARD_HCSR04_ECHO_GPIO  35   /* chỉ đọc, qua cầu chia áp */
 

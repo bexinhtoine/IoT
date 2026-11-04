@@ -1,3 +1,5 @@
+> Cập nhật luồng vận hành: HC-SR04 ≤30 cm → chụp → xác nhận hộp → QR → bao bì → gạt. Vật không xác nhận là hộp báo đỏ 3 nhịp (NOT_BOX=4) và vào đường loại. Hộp OK báo xanh một nhịp 300 ms; hộp lỗi báo đỏ một nhịp 300 ms; sau đó tắt. Điều kiện hiện hành: [DEVICE_IO.md](DEVICE_IO.md); phần prompt lịch sử phía dưới có thể mô tả thứ tự cũ.
+
 
 # Smart Logistics Sorter — Đặc tả & Prompt code
 
@@ -22,10 +24,10 @@ Tên đề tài: Hệ thống phân loại kiện hàng thông minh, kết hợp
 | 1 | Hợp lệ, kho A | OK | SORT_A | A | LED xanh, còi bíp ngắn, log |
 | 2 | Hợp lệ, kho B | OK | SORT_B | B | LED xanh, còi bíp ngắn, log |
 | 3 | Hợp lệ | Lỗi, hoặc độ tin cậy dưới ngưỡng | REJECT_DEFECT | Loại | LED đỏ, ảnh lỗi + nhãn lỗi trên dashboard |
-| 4 | Không đọc được, sai định dạng, chữ ký sai, mã trùng, hết hạn | — (không chạy AI) | REJECT_SECURITY | Loại | LED đỏ nhấp nháy, còi dài, cảnh báo bảo mật (alarm) |
+| 4 | Không đọc được, sai định dạng, chữ ký sai, mã trùng, hết hạn | — (không chạy AI) | REJECT_SECURITY | Loại | LED đỏ 3 nhịp rồi tắt, 3 bíp, cảnh báo bảo mật (alarm) |
 | 5 | Hết thời gian chờ lệnh, mất kết nối, lỗi hệ thống | — | REJECT_FAILSAFE | Loại | LED đỏ, log lỗi |
 
-Thứ tự xét: kiểm tra QR trước, QR không hợp lệ thì loại ngay và bỏ qua AI. Nguyên tắc fail-safe: mọi trường hợp không chắc chắn đều vào khay Loại, không bao giờ vào A hoặc B.
+Thứ tự xét: xác nhận đúng một hộp trước; không hộp/nhiều hộp thì REJECT_DEFECT với reason NOT_BOX và bỏ qua QR/bao bì. Có hộp mới kiểm tra QR; QR không hợp lệ thì bỏ qua classifier bao bì. Nguyên tắc fail-safe: mọi trường hợp không chắc chắn đều vào khay Loại, không bao giờ vào A hoặc B.
 
 ### 1.3 Yêu cầu bắt buộc của đề tài
 
@@ -43,7 +45,7 @@ Thứ tự xét: kiểm tra QR trước, QR không hợp lệ thì loại ngay v
 - Đèn chiếu sáng cố định quanh vị trí chụp, không phụ thuộc ánh sáng phòng.
 - Pi, ESP32 (khi OTA) và laptop chạy ThingsBoard + app OTA dùng chung một mạng Wi-Fi/LAN.
 - ThingsBoard Community Edition tự cài bằng Docker trên laptop (cần để bật MQTT TLS và chứng chỉ X.509).
-- Câu hỏi mở cần nhóm chốt: dùng TCRT5000 hay HC-SR04; servo SG90 hay MG996R; kích thước hộp và chiều dài băng. Code hỗ trợ cả hai loại cảm biến qua file cấu hình.
+- Đã chốt HC-SR04 duy nhất, phát hiện vật trong 30 cm. Còn cần chọn loại servo, kích thước hộp và chiều dài băng theo phần cứng.
 
 ## 2. Kiến trúc hệ thống và phần cứng
 
@@ -74,7 +76,7 @@ Pi chỉ nói chuyện với ThingsBoard qua MQTT TLS 8883 bằng chứng chỉ 
 | Động cơ DC giảm tốc + băng chuyền | 1 | Băng tự chế hoặc mua bộ có sẵn |
 | Driver L298N | 1 | Bỏ jumper ENA để điều tốc bằng PWM |
 | Servo SG90 hoặc MG996R | 2 | Servo A và servo B, mỗi servo một tay gạt chéo |
-| Cảm biến TCRT5000 hoặc HC-SR04 | 1 | Đặt ngay dưới vùng camera |
+| Cảm biến siêu âm HC-SR04 | 1 | Đặt ngay dưới vùng camera |
 | LED xanh, LED đỏ, còi buzzer | 1 mỗi loại | Còi qua transistor NPN nếu dòng > 20 mA |
 | Nút dừng khẩn cấp loại nấm, có 2 tiếp điểm NC | 1 | 1 tiếp điểm cắt nguồn động cơ, 1 tiếp điểm báo về ESP32 |
 | Đèn LED chiếu sáng cố định (dải LED hoặc vòng LED) | 1 | Rất quan trọng cho độ ổn định của AI |
@@ -92,8 +94,7 @@ Pi chỉ nói chuyện với ThingsBoard qua MQTT TLS 8883 bằng chứng chỉ 
 | Chiều động cơ | GPIO26, GPIO27 | L298N IN1, IN2 | Chỉ chạy một chiều |
 | Servo A | GPIO18 | Tín hiệu servo A | LEDC 50 Hz, nguồn 5 V riêng |
 | Servo B | GPIO19 | Tín hiệu servo B | LEDC 50 Hz, nguồn 5 V riêng |
-| Cảm biến TCRT5000 | GPIO34 | Chân DO | Chân chỉ đọc |
-| HC-SR04 (nếu dùng) | GPIO13 / GPIO35 | TRIG / ECHO | ECHO qua cầu chia áp 1 kΩ – 2 kΩ |
+| HC-SR04 (bắt buộc) | GPIO13 / GPIO35 | TRIG / ECHO | ECHO qua cầu chia áp 1 kΩ – 2 kΩ |
 | LED xanh / LED đỏ | GPIO32 / GPIO33 | Qua điện trở 220 Ω |  |
 | Còi | GPIO23 | Qua transistor NPN |  |
 | Nút E-stop | GPIO39 | Tiếp điểm NC xuống GND, điện trở kéo lên 10 kΩ | Bình thường LOW; bấm hoặc đứt dây thành HIGH thì dừng (fail-safe) |
@@ -111,12 +112,12 @@ Cách này để lỗi nghiêng về an toàn: servo hỏng hoặc không có l�
 
 ### 2.5 Luồng xử lý một kiện (kiểu dừng rồi chụp)
 
-- ESP32 đang chạy băng; cảm biến báo có hàng thì ESP32 dừng băng ngay (mục tiêu < 20 ms) và gửi EVT_PKG_DETECTED kèm số thứ tự kiện.
+- ESP32 đang chạy băng; cảm biến báo có hàng thì ESP32 dừng băng sau khi xác nhận hai mẫu siêu âm (đo mỗi 70 ms) và gửi EVT_PKG_DETECTED kèm số thứ tự kiện.
 - Pi chờ băng ổn định 150 ms rồi chụp ảnh (tối đa 3 khung nếu chưa đọc được QR).
-- Pi giải mã QR và xác thực: định dạng, kho, chữ ký HMAC, thời gian, chống trùng. Sai thì quyết định ngay REJECT_SECURITY, bỏ qua AI.
-- QR hợp lệ thì Pi cắt vùng ROI và chạy AI phân loại OK/Lỗi.
+- Pi chạy detector trong ROI để xác nhận đúng một hộp; nếu thất bại báo đỏ 3 nhịp, loại và bỏ QR/bao bì. Nếu có hộp, Pi giải mã QR và xác thực: định dạng, kho, chữ ký HMAC, thời gian, chống trùng. Sai thì quyết định ngay REJECT_SECURITY, bỏ qua AI.
+- QR hợp lệ thì Pi dùng crop hộp của cùng khung để chạy MobileNetV4 phân loại OK/Lỗi (RGB 256×256).
 - Pi ra quyết định theo bảng 1.2, gửi lệnh SORT qua UART, chờ ACK tối đa 200 ms, gửi lại tối đa 3 lần.
-- ESP32 đặt servo, chạy băng trong t_clear ms, trả servo về, bật LED/còi theo lý do, gửi EVT_SORT_DONE. Quá 3 s không nhận SORT thì ESP32 tự xử lý như REJECT_FAILSAFE.
+- ESP32 đặt servo, chạy băng trong t_clear ms, trả servo về và gửi EVT_SORT_DONE. LED/còi đã báo một lần khi nhận SORT, không báo lặp lúc kết thúc. Quá 3 s không nhận SORT thì ESP32 tự xử lý như REJECT_FAILSAFE.
 - Pi ghi SQLite, gửi telemetry, ảnh lỗi (nếu có) và cảnh báo lên ThingsBoard.
 Ngân sách thời gian từ lúc dừng băng đến lúc gửi SORT: ≤ 1 s (khớp mức dừng 0,5–1 s). Thời gian thật đo được đưa vào slide.
 
@@ -128,10 +129,10 @@ Hệ thống có 7 module với 75 chức năng đánh mã (E, P, AI, T, S, O, A
 
 - E-01 Máy trạng thái: BOOT → IDLE → RUNNING → DETECTED → SORTING → RUNNING; thêm ESTOP, FAULT, OTA. Lệnh không hợp lệ ở trạng thái hiện tại bị NACK mã BAD_STATE.
 - E-02 Điều khiển băng chuyền: START(speed %), STOP; tăng tốc mềm 200 ms để hàng không trượt; dừng tức thì khi phát hiện hàng hoặc E-stop.
-- E-03 Phát hiện kiện hàng: TCRT5000 đọc bằng ngắt + chống dội 20 ms; HC-SR04 đo mỗi 30 ms, xác nhận khi 2 lần đo liên tiếp dưới ngưỡng. Chỉ nhận khi đang RUNNING; sau mỗi lần gạt có thời gian khóa t_rearm.
+- E-03 Phát hiện kiện hàng: HC-SR04 đo mỗi 70 ms, xác nhận khi 2 lần liên tiếp trong 20..300 mm; khóa lặp đến khi 3 mẫu >330 mm hoặc không có echo. Chỉ nhận khi đang RUNNING; sau mỗi lần gạt có thời gian khóa t_rearm.
 - E-04 Gạt hàng: nhận SORT(target, reason, pkg_seq); A thì xoay servo A sang góc gạt, B thì servo B, REJECT thì không gạt; chạy băng t_clear_A/B/R ms; trả servo về góc nghỉ; gửi EVT_SORT_DONE.
 - E-05 Tự loại khi quá hạn: ở DETECTED quá t_decision_timeout (mặc định 3000 ms) không có SORT thì tự xử lý REJECT lý do FAILSAFE và gửi EVT_FAULT(DECISION_TIMEOUT).
-- E-06 Đèn và còi: RUNNING sáng xanh; OK bíp ngắn 100 ms; DEFECT đỏ sáng 1 s; SECURITY đỏ nháy 2 s + 3 tiếng bíp; ESTOP đỏ nháy liên tục + còi 1 s; FAULT xanh–đỏ nháy luân phiên; OTA xanh nháy nhanh.
+- E-06 Đèn/còi: chờ và kiểm tra đều tắt; OK xanh 300 ms + bíp 100 ms; DEFECT/FAILSAFE đỏ 300 ms; NOT_BOX đỏ 3 nhịp (200 ms sáng/200 ms tắt); SECURITY cùng 3 nhịp + 3 bíp. Các nhịp kết thúc rồi tắt. ESTOP/FAULT đỏ sáng cố định tới reset, ESTOP kèm còi 1 s; OTA tắt đèn.
 - E-07 Dừng khẩn cấp vật lý: ngắt GPIO39; trong ISR tắt PWM động cơ ngay, vào ESTOP, gửi EVT_ESTOP(PHYSICAL). Chỉ thoát khi nút đã nhả và nhận ESTOP_RESET; về IDLE, không tự chạy lại.
 - E-08 Dừng khẩn cấp từ xa: lệnh ESTOP từ Pi (nút trên dashboard), xử lý như E-07, nguồn REMOTE.
 - E-09 Watchdog liên kết: Pi gửi PING mỗi 500 ms. Đang RUNNING/DETECTED mà 2000 ms không có khung hợp lệ thì dừng băng, vào FAULT(LINK_LOST). Có thêm task watchdog của ESP-IDF cho chính ESP32.
@@ -147,7 +148,7 @@ Hệ thống có 7 module với 75 chức năng đánh mã (E, P, AI, T, S, O, A
 - P-02 Camera: picamera2, mở một lần và giữ suốt phiên; khóa phơi sáng và cân bằng trắng sau khi khởi động để ảnh đồng đều giữa các lần chụp.
 - P-03 Đọc QR: pyzbar, dự phòng cv2.QRCodeDetector; thử tối đa 3 khung, tăng tương phản nếu thất bại; nhiều hơn 1 mã trong ảnh thì coi là không hợp lệ.
 - P-04 Xác thực QR: theo S-03.
-- P-05 Phân loại bao bì: cắt ROI theo cấu hình, resize 224×224, chạy ONNX Runtime (hoặc TFLite), trả nhãn, độ tin cậy, thời gian suy luận; độ tin cậy dưới ai.min_confidence (mặc định 0,6) thì coi là Lỗi (UNCERTAIN).
+- P-05 Phân loại bao bì: cắt ROI theo cấu hình, resize 256×256 cho model 3-best, chạy ONNX Runtime, trả nhãn, độ tin cậy, thời gian suy luận; độ tin cậy dưới ai.min_confidence (mặc định 0,6) thì coi là Lỗi (UNCERTAIN).
 - P-06 Quyết định: hàm thuần decide(qr_result, ai_result) trả (target, decision_code, reason) đúng bảng 1.2; có unit test cho mọi hàng của bảng.
 - P-07 Liên kết UART: lớp UartLink chạy thread riêng; gửi lệnh có chờ ACK và gửi lại; đẩy sự kiện nhận được vào hàng đợi; PING định kỳ; theo dõi trạng thái liên kết; đếm lỗi CRC.
 - P-08 Vòng điều phối: chờ EVT_PKG_DETECTED → chạy pipeline → gửi SORT; xử lý EVT_ESTOP, EVT_FAULT, EVT_OTA_STATUS; mỗi lúc chỉ xử lý 1 kiện.
@@ -270,7 +271,7 @@ Pi → ESP32:
 | 0x11 | STOP | — | IDLE, RUNNING |
 | 0x12 | ESTOP | — | Mọi trạng thái |
 | 0x13 | ESTOP_RESET | — | ESTOP (nút đã nhả), FAULT |
-| 0x20 | SORT | target u8 (1=A, 2=B, 3=REJECT), reason u8 (0=OK, 1=DEFECT, 2=SECURITY, 3=FAILSAFE), pkg_seq u16 | DETECTED |
+| 0x20 | SORT | target u8 (1=A, 2=B, 3=REJECT), reason u8 (0=OK, 1=DEFECT, 2=SECURITY, 3=FAILSAFE, 4=NOT_BOX), pkg_seq u16 | DETECTED |
 | 0x40 | SET_PARAM | param_id u8, value u16 | IDLE |
 | 0x50 | OTA_CHECK | — | IDLE |
 | 0x60 | GET_STATUS | — | Mọi trạng thái |
@@ -306,7 +307,7 @@ Tham số SET_PARAM (ngoài danh sách hoặc ngoài miền thì NACK BAD_PARAM)
 | 8 | t_clear_reject | ms | 500–10000 | 5000 |
 | 9 | t_rearm | ms | 0–3000 | 500 |
 | 10 | t_decision_timeout | ms | 1000–10000 | 3000 |
-| 11 | hcsr04_threshold | mm | 20–400 | 80 |
+| 11 | hcsr04_threshold | mm | 300 (cố định) | 300 |
 
 Các giá trị mặc định là điểm xuất phát; nhóm hiệu chỉnh lại theo băng chuyền thật.
 
@@ -542,7 +543,7 @@ Không làm: logic điều khiển, ThingsBoard, AI.
 Bối cảnh: đã có component protocol từ P1. ESP-IDF v5.x, C. Sơ đồ chân theo 2.3, giao thức theo 4.2, đèn/còi theo E-06.
 
 Yêu cầu:
-1. Cấu trúc: main/app_main.c; components: board (định nghĩa chân), motor (L298N, LEDC 1 kHz 10 bit, ramp 200 ms), servo (LEDC 50 Hz, góc → xung 500–2500 µs, chặn góc 0–180), sensor (TCRT5000: ngắt + chống dội 20 ms; HC-SR04: đo mỗi 30 ms, 2 lần liên tiếp dưới ngưỡng; chọn loại bằng Kconfig), indicator (pattern LED/còi không chặn, dùng esp_timer), estop (GPIO39 ngắt cả hai cạnh), link (UART2 + protocol + ACK + gửi lại + chống lặp SEQ), params (NVS + whitelist min/max từ protocol_gen.h), fsm (máy trạng thái).
+1. Cấu trúc: main/app_main.c; components: board (định nghĩa chân), motor (L298N, LEDC 1 kHz 10 bit, ramp 200 ms), servo (LEDC 50 Hz, góc → xung 500–2500 µs, chặn góc 0–180), sensor (HC-SR04 duy nhất: 70 ms/mẫu, 2 lần 20..300 mm, latch chống đếm lặp), indicator (pattern LED/còi không chặn, dùng esp_timer), estop (GPIO39 ngắt cả hai cạnh), link (UART2 + protocol + ACK + gửi lại + chống lặp SEQ), params (NVS + whitelist min/max từ protocol_gen.h), fsm (máy trạng thái).
 2. E-01: bảng chuyển trạng thái viết trong comment đầu fsm.c; mọi sự kiện (lệnh UART, cảm biến, E-stop, timeout) vào một queue, một task fsm xử lý tuần tự; lệnh sai trạng thái → NACK BAD_STATE.
 3. E-03/E-04/E-05: phát hiện hàng → dừng băng ngay, sang DETECTED, gửi EVT_PKG_DETECTED (gửi lại nếu chưa có ACK), chờ SORT tối đa t_decision_timeout; nhận SORT → đặt servo, chạy băng t_clear_x, trả servo về, gửi EVT_SORT_DONE, chờ t_rearm mới nhận cảm biến tiếp; quá hạn → tự REJECT lý do FAILSAFE + EVT_FAULT(DECISION_TIMEOUT).
 4. E-07/E-08: ISR E-stop tắt PWM động cơ và kéo IN1/IN2 về 0 ngay, rồi báo task; ESTOP chỉ thoát khi GPIO39 về LOW (nút đã nhả) và nhận ESTOP_RESET → IDLE, không tự chạy lại. Tiếp điểm NC: LOW = bình thường, HIGH = dừng (đứt dây cũng dừng).

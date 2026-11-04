@@ -23,11 +23,12 @@ Model triển khai chính thức là **MobileNetV4 từ `3-best.ipynb` của nh�
 ## Quy trình ảnh và quyết định
 
 ```text
-Picamera2 RGB → xác thực QR → camera.roi
+HC-SR04 ≤30 cm → dừng băng → Picamera2 RGB → camera.roi
     → YOLO-World tìm cardboard box (nếu bật)
     → phải có đúng 1 hộp sau confidence, lọc diện tích và NMS
     → crop hộp + padding 10%, giới hạn trong ROI
-    → resize 256×256 INTER_AREA → float32 / 255 → NCHW
+    → quét/xác thực QR trên cùng khung hình
+    → chỉ khi QR hợp lệ: resize 256×256 INTER_AREA → float32 / 255 → NCHW
     → MobileNetV4 ONNX (mean/std đã nằm trong graph)
     → probabilities [normal, damage]
     → OK / DEFECT / UNCERTAIN → luật QR + AI → UART
@@ -98,7 +99,7 @@ scp ai/models/packaging_cls.onnx ai/models/labels.json ai/models/model_card.json
 scp ai/models/box_detector.onnx sorter@pi.local:/tmp/
 ```
 
-Trên Pi, chuyển các file từ `/tmp/` vào `/opt/sorter/models/` bằng sudo, đảm bảo user sorter đọc được. Dùng `pi/config.example.yaml` làm cấu hình `/etc/sorter/config.yaml`; mẫu này bật detector, nên phải có file detector trước khi chạy. Nếu chưa chuẩn bị detector, đặt `ai.detection.backend: none` và căn ROI cố định chứa đúng một hộp; chế độ này **không xác minh có hộp**.
+Trên Pi, chuyển các file từ `/tmp/` vào `/opt/sorter/models/` bằng sudo, đảm bảo user sorter đọc được. Dùng `pi/config.example.yaml` làm cấu hình `/etc/sorter/config.yaml`; mẫu này bật detector, nên phải có file detector trước khi chạy. Băng chuyền thật yêu cầu detector. `ai.detection.backend: none` chỉ dùng công cụ thử classifier riêng hoặc simulator, không được dùng bỏ qua bước xác nhận hộp khi điều khiển UART thật.
 
 Classifier dùng input_size 256, threads 4; detector dùng 640. Chỉnh `camera.roi` theo camera thật, khóa AE/AWB, ánh sáng ổn định. Chạy:
 
@@ -143,3 +144,5 @@ python -m pytest -q
 Test mới kiểm tra model thật và hash, tiền xử lý, nhãn, parity, NMS, crop đúng vùng, không hộp/nhiều hộp, sai model detector và kết nối factory với ONNX. Detector ONNX tổng hợp trong unit test chỉ xác minh đường đi mã; không chứng minh detector nhận ra hộp thật.
 
 Nguồn: [YOLO-World Ultralytics](https://docs.ultralytics.com/models/yolo-world/), [torch.load](https://docs.pytorch.org/docs/stable/generated/torch.load.html).
+
+Điều kiện thiết bị/LED và luồng siêu âm mới: [DEVICE_IO.md](../docs/DEVICE_IO.md). Không phát hiện hộp là chưa xác nhận được hộp, không bảo đảm vật thực sự không phải hộp (detector có thể bỏ sót).

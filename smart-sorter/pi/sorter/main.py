@@ -52,7 +52,7 @@ class App:
 
     def __init__(self, cfg: SorterConfig) -> None:
         self.cfg = cfg
-        self.storage = Storage(cfg.storage.db_path)
+        self.storage = Storage(cfg.storage.target, outbox_path=cfg.storage.db_path + ".outbox.db")
         self.counters = Counters(self.storage)
         self.telemetry = make_telemetry(cfg)
         self.security_log = SecurityLog(self.storage, self.telemetry)
@@ -91,7 +91,7 @@ class App:
             self.anomaly.start()
         self.uart.start()
         self.storage.insert_system_event("STARTUP", f"sim={self.cfg.sim} config={self.cfg.source_path}")
-        if self.cfg.sim and self.cfg.device.demo_mode:
+        if self.cfg.sim and self.cfg.device.demo_mode and self.cfg.storage.backend == "sqlite":
             # Sim/demo: xóa mã đã dùng để chạy lại cùng bộ ảnh vẫn cho kết quả như nhau
             n = self.storage.clear_used_codes()
             if n:
@@ -180,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         app = App(cfg)
-    except (ConfigError, FileNotFoundError, ValueError, RuntimeError) as e:
+    except (ConfigError, FileNotFoundError, ValueError, RuntimeError, ConnectionError) as e:
         log.error("Khởi tạo thất bại: %s", e)
         sys.stderr.write(f"Lỗi khởi tạo: {e}\n")
         return 2

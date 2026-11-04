@@ -70,6 +70,7 @@ typedef enum {
     REASON_DEFECT = 1,
     REASON_SECURITY = 2,
     REASON_FAILSAFE = 3,
+    REASON_NOT_BOX = 4,
 } proto_sort_reason_t;
 
 /* ---- OTA stage / reason (4.5) ---- */
@@ -289,7 +290,7 @@ static const proto_param_desc_t PROTO_PARAMS[PROTO_PARAM_COUNT] = {
     { 8, "t_clear_reject", 500, 10000, 5000 },
     { 9, "t_rearm", 0, 3000, 500 },
     { 10, "t_decision_timeout", 1000, 10000, 3000 },
-    { 11, "hcsr04_threshold", 20, 400, 80 },
+    { 11, "hcsr04_threshold", 300, 300, 300 },
 };
 /* Tìm mô tả tham số theo id; NULL nếu không có */
 static inline const proto_param_desc_t *proto_param_find(uint8_t id) {

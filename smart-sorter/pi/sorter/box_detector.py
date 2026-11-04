@@ -104,24 +104,36 @@ class BoxDetector:
 
 class DetectedBoxClassifier(Classifier):
     """Không có hộp/nhiều hộp → UNCERTAIN; lỗi suy luận → orchestrator fail-safe."""
+    detects_boxes = True
     def __init__(self, classifier: Classifier, detector: BoxDetector) -> None:
         self.classifier, self.detector = classifier, detector
         self.model_version = classifier.model_version
         self.spec = getattr(classifier, "spec", None)
         self.last_boxes: list[Box] = []
+        self.last_object_status = "NOT_CHECKED"
 
-    def predict(self, image: np.ndarray, roi: tuple[int, int, int, int] | None = None) -> ClassResult:
-        start = time.perf_counter()
+    def prepare_box(self, image: np.ndarray, roi: tuple[int, int, int, int] | None = None) -> np.ndarray | None:
         region = crop_roi(image, roi)
         self.last_boxes = self.detector.detect(region)
+        self.last_object_status = "NO_BOX" if not self.last_boxes else "MULTIPLE_BOXES" if len(self.last_boxes) > 1 else "BOX"
         if len(self.last_boxes) != 1:
-            log.warning("BOX_COUNT=%d: cần đúng một hộp trong camera.roi", len(self.last_boxes))
-            return ClassResult(LABEL_UNCERTAIN, 0.0, infer_ms=(time.perf_counter() - start) * 1000,
-                               model_version=self.model_version)
+            log.warning("BOX_COUNT=%d: bo qua QR va phan loai bao bi", len(self.last_boxes))
+            return None
         box = self.last_boxes[0]
         x1, y1, x2, y2 = box.xyxy
         log.info("BOX xyxy=%s confidence=%.3f (tọa độ trong ROI)", box.xyxy, box.confidence)
-        result = self.classifier.predict(region[y1:y2, x1:x2])
+        return region[y1:y2, x1:x2]
+
+    def classify_box(self, box: np.ndarray) -> ClassResult:
+        return self.classifier.predict(box)
+
+    def predict(self, image: np.ndarray, roi: tuple[int, int, int, int] | None = None) -> ClassResult:
+        start = time.perf_counter()
+        box = self.prepare_box(image, roi)
+        if box is None:
+            return ClassResult(LABEL_UNCERTAIN, 0.0, infer_ms=(time.perf_counter() - start) * 1000,
+                               model_version=self.model_version)
+        result = self.classify_box(box)
         result.infer_ms = round((time.perf_counter() - start) * 1000, 2)
         return result
 

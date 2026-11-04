@@ -1,5 +1,6 @@
 # Dependencies and generated files
 node_modules/
+.codex-runtime/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/

@@ -38,6 +38,7 @@ from typing import Any, Iterable
 
 PI_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = PI_ROOT.parent
+sys.path.insert(0, str(PI_ROOT))
 
 log = logging.getLogger("report_metrics")
 
@@ -127,17 +128,24 @@ def default_db_path() -> Path:
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    if getattr(conn, "postgres", False):
+        return conn.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='iot_project' AND table_name=?", (name,)).fetchone() is not None
     row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
     return row is not None
 
 
-def read_db(path: Path, last_n: int = 0) -> DbStats | None:
-    if not path.is_file():
+def read_db(path: Path | str, last_n: int = 0) -> DbStats | None:
+    postgres = str(path).startswith(("postgresql://", "postgres://"))
+    if not postgres and not Path(path).is_file():
         log.warning("Không có DB %s", path)
         return None
-    st = DbStats(path=str(path))
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
+    st = DbStats(path="PostgreSQL / iot_project" if postgres else str(path))
+    if postgres:
+        from sorter.database import open_database
+        conn = open_database(path)
+    else:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
     try:
         if _table_exists(conn, "packages"):
             sql = "SELECT * FROM packages ORDER BY id DESC"
@@ -467,6 +475,7 @@ def render(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Sinh docs/metrics.md từ SQLite + file kết quả của P4/P7/P9")
     ap.add_argument("--db", default=None, help="sorter.db (mặc định pi/run/sorter.db nếu có, nếu không /var/lib/sorter/sorter.db)")
+    ap.add_argument("--config", default=None, help="YAML cấu hình PostgreSQL hoặc SQLite; đọc bí mật từ .env")
     ap.add_argument("--last", type=int, default=0, help="chỉ lấy N kiện gần nhất (0 = tất cả)")
     ap.add_argument("--expected", default=None, help="CSV pkg_id,expected_decision")
     ap.add_argument("--metrics-json", dest="metrics_json", default=None, help="metrics.json của ai/evaluate.py")
@@ -480,7 +489,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
-    db_path = Path(args.db) if args.db else default_db_path()
+    if args.config:
+        from sorter.config import load_config
+        db_path = load_config(args.config, validate_files=False).storage.target
+    else:
+        db_path = Path(args.db) if args.db else default_db_path()
     db = read_db(db_path, args.last)
     expected = read_expected(args.expected)
     metrics = load_json(args.metrics_json)

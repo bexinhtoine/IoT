@@ -4,10 +4,10 @@
  * Trạng thái | Sự kiện                         | Hành động                                              | Sang
  * -----------+---------------------------------+--------------------------------------------------------+----------
  * BOOT       | fsm task bắt đầu                | servo home, indicator IDLE                             | IDLE
- * IDLE       | START(speed 30–100)             | ACK; motor_start(speed) ramp 200 ms; sensor on; xanh   | RUNNING
+ * IDLE       | START(speed 30–100)             | ACK; motor_start(speed) ramp 200 ms; sensor on; den tat | RUNNING
  * IDLE       | STOP                            | ACK (không làm gì)                                     | IDLE
  * IDLE       | SET_PARAM(id, value)            | hợp lệ → params_set + áp dụng, ACK; sai → NACK BAD_PARAM | IDLE
- * IDLE       | OTA_CHECK                       | ota_secure_start() OK → ACK; sensor off; xanh nháy nhanh | OTA
+ * IDLE       | OTA_CHECK                       | ota_secure_start() OK → ACK; sensor off; den tat | OTA
  * RUNNING    | sensor                          | motor_stop NGAY; sensor off; pkg_seq++;                | DETECTED
  *            |                                 | EVT_PKG_DETECTED(pkg_seq); timer t_decision_timeout    |
  * RUNNING    | STOP                            | ACK; motor_stop; sensor off; indicator IDLE            | IDLE
@@ -16,14 +16,14 @@
  *            |                                 | hợp lệ → ACK; hủy timer decision; servo A/B gạt (REJECT: không); | SORTING
  *            |                                 | motor_start; timer t_clear_{a,b,reject}                |
  * DETECTED   | timeout t_decision_timeout      | như SORT(REJECT, FAILSAFE) + EVT_FAULT(DECISION_TIMEOUT) | SORTING
- * SORTING    | timeout t_clear                 | servo home; indicator theo reason (OK bíp / DEFECT đỏ 1 s / | RUNNING
- *            |                                 | SECURITY đỏ nháy + 3 bíp / FAILSAFE đỏ); EVT_SORT_DONE(pkg_seq, target); |
+ * SORTING    | timeout t_clear                 | servo home; khong lap lai pattern LED da bao luc SORT; | RUNNING
+ *            |                                 | EVT_SORT_DONE(pkg_seq, target); |
  *            |                                 | motor vẫn chạy; sensor khóa t_rearm (0 → mở ngay)      |
  * RUNNING/   | LINK_LOST (>2000 ms không khung)| motor_stop; servo home; sensor off; indicator FAULT;   | FAULT
  * DETECTED/  |                                 | ghi nhớ EVT_FAULT(LINK_LOST) — gửi khi liên kết trở lại |
  * SORTING    |                                 |                                                        |
  * mọi        | ESTOP (lệnh) / nút E-stop (ISR) | ISR đã tắt PWM; motor_stop; servo home; sensor off;    | ESTOP
- *   (≠ESTOP) |                                 | hủy timer; đỏ nháy + còi; EVT_ESTOP(REMOTE/PHYSICAL);  |
+ *   (≠ESTOP) |                                 | hủy timer; do sang tinh + coi; EVT_ESTOP(REMOTE/PHYSICAL);  |
  *            |                                 | đang OTA → ota_secure_abort()                          |
  * ESTOP      | ESTOP (lệnh)                    | ACK (idempotent)                                       | ESTOP
  * ESTOP/     | ESTOP_RESET                     | nút còn bấm/đứt dây → NACK BAD_STATE;                  | IDLE
@@ -82,7 +82,6 @@ static volatile uint8_t s_state = ST_BOOT;
 static uint16_t s_pkg_seq;          /* số thứ tự kiện (tăng mỗi lần phát hiện) */
 static uint8_t s_run_speed;         /* tốc độ START gần nhất */
 static uint8_t s_sort_target;
-static uint8_t s_sort_reason;
 static bool s_pending_link_fault;   /* nợ EVT_FAULT(LINK_LOST) cho tới khi liên kết lên */
 static bool s_pending_wdt_fault;    /* nợ EVT_FAULT(WDT_RESET) */
 
@@ -234,7 +233,6 @@ static void enter_fault_link_lost(void)
 static void start_sorting(uint8_t target, uint8_t reason)
 {
     s_sort_target = target;
-    s_sort_reason = reason;
     uint32_t t_clear;
     switch (target) {
     case TARGET_A:
@@ -250,6 +248,15 @@ static void start_sorting(uint8_t target, uint8_t reason)
         break;
     }
     set_state(ST_SORTING);
+    /* Bao ket qua NGAY khi nhan SORT, khong cho vat ra khoi bang moi bao do. */
+    indicator_set(INDICATOR_RUNNING); /* nen tat khi pattern ket thuc */
+    switch (reason) {
+    case REASON_OK: indicator_set(INDICATOR_OK); break;
+    case REASON_DEFECT: indicator_set(INDICATOR_DEFECT); break;
+    case REASON_NOT_BOX: indicator_set(INDICATOR_NOT_BOX); break;
+    case REASON_SECURITY: indicator_set(INDICATOR_SECURITY); break;
+    default: indicator_set(INDICATOR_FAILSAFE); break;
+    }
     (void)motor_start(s_run_speed);
     timer_start(TMR_CLEAR, t_clear);
     ESP_LOGI(TAG, "SORT pkg=%u target=%u reason=%u t_clear=%lu ms", s_pkg_seq, target, reason, (unsigned long)t_clear);
@@ -259,12 +266,6 @@ static void start_sorting(uint8_t target, uint8_t reason)
 static void finish_sorting(void)
 {
     servos_home();
-    switch (s_sort_reason) {
-    case REASON_OK: indicator_set(INDICATOR_OK); break;
-    case REASON_DEFECT: indicator_set(INDICATOR_DEFECT); break;
-    case REASON_SECURITY: indicator_set(INDICATOR_SECURITY); break;
-    default: indicator_set(INDICATOR_FAILSAFE); break;
-    }
     proto_evt_sort_done_t p = { .pkg_seq = s_pkg_seq, .target = s_sort_target };
     (void)link_send_event(MSG_EVT_SORT_DONE, &p, sizeof(p));
     set_state(ST_RUNNING);
@@ -352,8 +353,10 @@ static void handle_cmd(const proto_frame_t *f)
         proto_sort_t p;
         memcpy(&p, f->payload, sizeof(p));
         bool target_ok = (p.target == TARGET_A || p.target == TARGET_B || p.target == TARGET_REJECT);
-        bool reason_ok = (p.reason <= REASON_FAILSAFE);
-        if (!target_ok || !reason_ok || p.pkg_seq != s_pkg_seq) {
+        bool reason_ok = (p.reason <= REASON_NOT_BOX);
+        if (!target_ok || !reason_ok || p.pkg_seq != s_pkg_seq ||
+            (p.target != TARGET_REJECT && p.reason != REASON_OK) ||
+            (p.target == TARGET_REJECT && p.reason == REASON_OK)) {
             ESP_LOGW(TAG, "SORT sai: target=%u reason=%u pkg_seq=%u (hien tai %u)", p.target, p.reason, p.pkg_seq,
                      s_pkg_seq);
             (void)link_send_nack(f, NACK_BAD_PARAM);
@@ -404,6 +407,7 @@ static void handle_sensor(void)
     sensor_set_enabled(false);
     s_pkg_seq++;
     set_state(ST_DETECTED);
+    indicator_set(INDICATOR_CHECKING);
     proto_evt_pkg_detected_t p = { .pkg_seq = s_pkg_seq };
     (void)link_send_event(MSG_EVT_PKG_DETECTED, &p, sizeof(p));
     timer_start(TMR_DECISION, params_get(PARAM_T_DECISION_TIMEOUT));

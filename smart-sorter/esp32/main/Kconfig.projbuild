@@ -8,21 +8,6 @@ menu "Smart Sorter (P2/P8)"
             nháy từng LED, kêu còi, rồi in trạng thái cảm biến và E-stop mỗi 200 ms (vô hạn).
             Không chạy máy trạng thái, không mở UART2 giao thức.
 
-    choice SORTER_SENSOR
-        prompt "Cảm biến phát hiện kiện hàng (E-03)"
-        default SORTER_SENSOR_TCRT5000
-
-        config SORTER_SENSOR_TCRT5000
-            bool "TCRT5000 — chân DO GPIO34, ngắt + chống dội 20 ms"
-        config SORTER_SENSOR_HCSR04
-            bool "HC-SR04 — TRIG GPIO13 / ECHO GPIO35, đo mỗi 30 ms"
-    endchoice
-
-    config SORTER_TCRT_ACTIVE_LOW
-        bool "TCRT5000: DO xuống LOW khi có vật (module so sánh LM393 thông dụng)"
-        depends on SORTER_SENSOR_TCRT5000
-        default y
-
     config SORTER_OTA_DEVICE_ID
         string "Tên thiết bị trong báo cáo OTA (O-14)"
         default "sorter-esp32-01"

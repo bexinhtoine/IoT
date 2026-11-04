@@ -73,6 +73,7 @@ sort_reasons:
   DEFECT: 1
   SECURITY: 2
   FAILSAFE: 3
+  NOT_BOX: 4  # khong xac nhan dung mot hop: do nhay 3 nhip
 
 # OTA stage / reason (phần 4.5)
 ota_stages:
@@ -249,7 +250,7 @@ params:
   - {id: 8,  name: t_clear_reject,      unit: ms,   min: 500,  max: 10000, default: 5000}
   - {id: 9,  name: t_rearm,             unit: ms,   min: 0,    max: 3000,  default: 500}
   - {id: 10, name: t_decision_timeout,  unit: ms,   min: 1000, max: 10000, default: 3000}
-  - {id: 11, name: hcsr04_threshold,    unit: mm,   min: 20,   max: 400,   default: 80}
+  - {id: 11, name: hcsr04_threshold,    unit: mm,   min: 300,  max: 300,   default: 300}
 
 # Hằng thời gian dùng chung
 timing:

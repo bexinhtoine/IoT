@@ -1,8 +1,8 @@
 """P-08 — Vòng điều phối: chờ EVT_PKG_DETECTED -> pipeline một kiện (2.5) -> SORT; xử lý các sự kiện khác.
 
 Pipeline một kiện (process_package):
-  settle_ms -> chụp tới max_qr_frames khung (dừng sớm khi đọc được QR) -> read_qr -> verify (S-03)
-  -> nếu VALID: classifier.predict(frame, roi) -> decide (P-06) -> SORT qua UART (chờ ACK, gửi lại)
+  settle_ms -> chụp -> prepare_box (không có/đa hộp: loại, bỏ QR) -> read_qr -> verify (S-03)
+  -> nếu VALID: classify_box(crop cùng khung) -> decide (P-06) -> SORT qua UART (chờ ACK, gửi lại)
   -> ghi packages, counters, telemetry (4.3), ảnh lỗi, sự kiện bảo mật.
 Mọi exception -> REJECT_FAILSAFE + system event + cố gửi SORT REJECT/FAILSAFE; vòng chính không bao giờ chết.
 """
@@ -12,13 +12,14 @@ import json
 import logging
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 from .camera import Camera
-from .config import SorterConfig
+from .config import ConfigError, SorterConfig
 from .counters import Counters
 from .decision import REJECT_DEFECT, REJECT_FAILSAFE, REJECT_SECURITY, Decision, decide
 from .defect_images import DefectImageStore
@@ -117,9 +118,14 @@ class PackageRecord:
     sort_error: str | None = None
     error: str | None = None
     image_name: str | None = None
+    record_uid: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def to_db(self) -> dict[str, Any]:
         return {
+            "record_uid": self.record_uid,
+            "sort_sent": int(self.sort_sent),
+            "sort_error": self.sort_error,
+            "error": self.error,
             "ts_ms": self.ts_ms,
             "pkg_seq": self.pkg_seq,
             "pkg_id": self.pkg_id,
@@ -173,6 +179,8 @@ class Orchestrator:
         fake: Any = None,
         defect_store: DefectImageStore | None = None,
     ) -> None:
+        if cfg.uart.port != "sim" and not classifier.detects_boxes:
+            raise ConfigError("Bang chuyen that can ai.detection.backend: yolo_world_onnx de kiem tra hop truoc QR")
         self.cfg = cfg
         self.camera = camera
         self.classifier = classifier
@@ -326,39 +334,47 @@ class Orchestrator:
         try:
             self.camera.on_package_start()
             rec.image_name = self.camera.next_name()
-            # 1. chờ băng ổn định rồi chụp (tối đa max_qr_frames khung, dừng sớm khi đọc được QR)
+            # 1. HC-SR04 da dung bang: chup -> xac nhan hop -> QR -> bao bi.
             if self.cfg.camera.settle_ms > 0:
                 time.sleep(self.cfg.camera.settle_ms / 1000.0)
-            tc = time.perf_counter()
-            frames: list[np.ndarray] = []
             read = None
-            tq_total = 0.0
+            box = None
+            object_status = "NOT_CHECKED"
             for _ in range(max(1, self.cfg.camera.max_qr_frames)):
+                tc = time.perf_counter()
                 frame = self.camera.capture()
-                frames.append(frame)
+                rec.t_capture_ms += (time.perf_counter() - tc) * 1000.0
+                self._last_frame = frame
+                ta = time.perf_counter()
+                box = self.classifier.prepare_box(frame, tuple(self.cfg.camera.roi))
+                rec.t_ai_ms += (time.perf_counter() - ta) * 1000.0
+                if box is None:
+                    object_status = getattr(self.classifier, "last_object_status", "NO_BOX")
+                    break  # KHONG doc QR, KHONG goi model bao bi tren vat khong xac nhan la hop
+                object_status = "BOX"
                 tq = time.perf_counter()
                 read = read_qr([frame])
-                tq_total += time.perf_counter() - tq
+                rec.t_qr_ms += (time.perf_counter() - tq) * 1000.0
                 if read.status != NO_QR:
                     break
-            rec.t_capture_ms = (time.perf_counter() - tc) * 1000.0 - tq_total * 1000.0
-            rec.t_qr_ms = tq_total * 1000.0
-            self._last_frame = frame
-            assert read is not None
-            # 2. xác thực QR (S-03)
-            tv = time.perf_counter()
-            qr = self.verifier.verify_read(read)
-            rec.t_verify_ms = (time.perf_counter() - tv) * 1000.0
-            rec.qr_status = qr.status
-            rec.pkg_id, rec.warehouse = qr.pkg_id, qr.warehouse
-            # 3. AI chỉ khi QR hợp lệ
-            if qr.status == VALID and frame is not None:
-                ta = time.perf_counter()
-                ai = self.classifier.predict(frame, tuple(self.cfg.camera.roi))  # type: ignore[arg-type]
-                rec.t_ai_ms = (time.perf_counter() - ta) * 1000.0
-                rec.ai_label, rec.ai_conf, rec.ai_types = ai.label, float(ai.confidence), dict(ai.defect_types)
-            # 4. quyết định (P-06)
-            decision = decide(qr, ai)
+            if box is None:
+                rec.qr_status = "SKIPPED_" + object_status
+                rec.ai_label, rec.ai_conf = object_status, 0.0
+                decision = Decision(SortTarget.REJECT, REJECT_DEFECT, SortReason.NOT_BOX, object_status)
+            else:
+                assert read is not None
+                tv = time.perf_counter()
+                qr = self.verifier.verify_read(read)
+                rec.t_verify_ms = (time.perf_counter() - tv) * 1000.0
+                rec.qr_status = qr.status
+                rec.pkg_id, rec.warehouse = qr.pkg_id, qr.warehouse
+                # Chi phan loai dung crop cua khung da doc QR; khong detect lai lan hai.
+                if qr.status == VALID:
+                    ta = time.perf_counter()
+                    ai = self.classifier.classify_box(box)
+                    rec.t_ai_ms += (time.perf_counter() - ta) * 1000.0
+                    rec.ai_label, rec.ai_conf, rec.ai_types = ai.label, float(ai.confidence), dict(ai.defect_types)
+                decision = decide(qr, ai)
         except Exception as e:
             log.exception("Pipeline lỗi (pkg_seq=%d): %s", pkg_seq, e)
             rec.error = f"{type(e).__name__}: {e}"
@@ -390,6 +406,13 @@ class Orchestrator:
             self._post_process(rec, qr, ai, frame, decision)
         except Exception as e:
             log.exception("Hậu xử lý kiện lỗi: %s", e)
+            # Preserve the pending journal and stop accepting more parcels until
+            # storage is repaired/restarted; never silently continue losing rows.
+            try:
+                self.uart.send_command(MsgType.STOP)
+                self._set_conveyor_state(State.IDLE.name)
+            except Exception:
+                log.exception("Không gửi được STOP sau lỗi lưu trữ")
             self._safe_system_event("POST_PROCESS_ERROR", str(e))
 
         log.info(
@@ -415,8 +438,7 @@ class Orchestrator:
                 rec.defect_image_path = str(path)
             except Exception as e:
                 log.error("Không lưu được ảnh lỗi: %s", e)
-        self.storage.insert_package(rec.to_db())
-        cnt = self.counters.record(rec.decision)
+        cnt = self.counters.record_package(rec.to_db())
         data = rec.to_telemetry()
         data.update(cnt)
         if image_b64 is not None:

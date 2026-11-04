@@ -30,6 +30,18 @@ def test_sim_config_loads():
     assert Path(cfg.qr.hmac_key_file).is_absolute()
 
 
+def test_postgres_env_file_and_override(tmp_path, monkeypatch):
+    monkeypatch.delenv("SORTER_DATABASE_URL", raising=False)
+    local = "postgresql://postgres:secret@example.com/postgres?sslmode=require"
+    (tmp_path / ".env").write_text("SORTER_DATABASE_URL=" + local, encoding="utf-8")
+    cfg = load_config(write_cfg(tmp_path, {"storage": {"backend": "postgresql"}}), validate_files=False)
+    assert cfg.storage.target == local
+    assert "secret" not in repr(cfg)
+    monkeypatch.setenv("SORTER_DATABASE_URL", local.replace("secret", "override"))
+    cfg = load_config(write_cfg(tmp_path, {"storage": {"backend": "postgresql"}}), validate_files=False)
+    assert "override" in cfg.storage.target
+
+
 def test_roi_outside_image(tmp_path):
     with pytest.raises(ConfigError, match="roi"):
         load_config(write_cfg(tmp_path, {"camera": {"resolution": [640, 480], "roi": [320, 160, 640, 640]}}))

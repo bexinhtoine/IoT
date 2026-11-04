@@ -91,3 +91,7 @@ hay `cv2.VideoCapture`. Chế độ mô phỏng dùng `FolderCamera` đọc ản
 X.509 mutual TLS cho MQTT · QR ký HMAC-SHA256 + chống replay · RPC whitelist, rate limit, audit · UART CRC16 + SEQ ·
 hardening Pi (SSH key, ufw, fail2ban) · Secure Boot V2 + Flash Encryption ESP32 · OTA ký ECDSA P-256 + chống rollback ·
 2FA TOTP trên ThingsBoard · Isolation Forest + luật cứng. Chi tiết: [docs/security_slide.md](docs/security_slide.md).
+
+## Luồng thiết bị hiện hành
+
+HC-SR04 phát hiện vật trong 30 cm → dừng băng, chụp → xác nhận hộp → quét QR → kiểm tra bao bì → gạt. LED báo theo từng vật rồi tắt. Xem [bảng input/output, đấu dây và điều kiện LED](docs/DEVICE_IO.md).

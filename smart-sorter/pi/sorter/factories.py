@@ -116,4 +116,4 @@ def make_anomaly(cfg: SorterConfig, telemetry: TelemetrySink, on_security_event:
     except ImportError as e:
         log.warning("Không có sorter.anomaly (P9) — bỏ qua phát hiện bất thường: %s", e)
         return None
-    return AnomalyDetector(cfg.anomaly, db_path=cfg.storage.db_path, telemetry=telemetry, on_security_event=on_security_event)
+    return AnomalyDetector(cfg.anomaly, db_path=cfg.storage.target, telemetry=telemetry, on_security_event=on_security_event)

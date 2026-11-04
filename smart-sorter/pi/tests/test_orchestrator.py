@@ -191,3 +191,59 @@ def test_estop_event_logged(rig: SimRig):
         time.sleep(0.01)
     assert rig.orch.conveyor_state == "ESTOP"
     assert any(d.get("security_event_type") == "ESTOP" for d in rig.telemetry.sent)
+
+
+@pytest.mark.parametrize("count,status", [(0, "NO_BOX"), (2, "MULTIPLE_BOXES")])
+def test_object_gate_skips_qr_and_classifier(rig, monkeypatch, count, status):
+    from sorter.box_detector import Box, DetectedBoxClassifier
+    class Detector:
+        def detect(self, image):
+            return [Box((0, 0, 40, 40), 0.9)] * count
+    def forbidden(*args, **kwargs):
+        pytest.fail("QR/bao bi khong duoc chay neu chua xac nhan dung mot hop")
+    rig.orch.classifier = DetectedBoxClassifier(rig.classifier, Detector())
+    monkeypatch.setattr("sorter.orchestrator.read_qr", forbidden)
+    monkeypatch.setattr(rig.classifier, "predict", forbidden)
+    rig.orch.start()
+    rec = rig.orch.run_once_sim(1)[0]
+    assert rec.decision == REJECT_DEFECT and rec.sort_sent
+    assert rec.ai_label == status and rec.qr_status == "SKIPPED_" + status
+    assert rig.fake.sent_sorts[-1].reason == SortReason.NOT_BOX
+    assert rig.storage.count_used_codes() == 0
+
+
+def test_box_then_qr_then_damage_on_same_crop(rig, monkeypatch):
+    from sorter.box_detector import Box, DetectedBoxClassifier
+    calls = []
+    class Detector:
+        def detect(self, image):
+            calls.append("detect")
+            return [Box((5, 7, 45, 37), 0.9)]
+    original_predict = rig.classifier.predict
+    original_read = read_qr
+    def predict(image, roi=None):
+        calls.append("classify")
+        assert image.shape[:2] == (30, 40)
+        return original_predict(image, roi)
+    def read(images):
+        calls.append("qr")
+        return original_read(images)
+    rig.orch.classifier = DetectedBoxClassifier(rig.classifier, Detector())
+    monkeypatch.setattr(rig.classifier, "predict", predict)
+    monkeypatch.setattr("sorter.orchestrator.read_qr", read)
+    rig.orch.start()
+    rec = rig.orch.run_once_sim(1)[0]
+    assert rec.decision == SORT_A
+    assert calls == ["detect", "qr", "classify"]
+
+
+def test_detector_failure_rejects_without_qr(rig, monkeypatch):
+    def fail(*args):
+        raise RuntimeError("detector failed")
+    def forbidden(*args):
+        pytest.fail("QR must not run after detector error")
+    monkeypatch.setattr(rig.classifier, "prepare_box", fail)
+    monkeypatch.setattr("sorter.orchestrator.read_qr", forbidden)
+    rig.orch.start()
+    rec = rig.orch.run_once_sim(1)[0]
+    assert rec.decision == REJECT_FAILSAFE and rec.sort_sent
